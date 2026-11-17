@@ -46,6 +46,8 @@
 #define MAX_PROJ    512
 #define MAX_FX      64
 #define MAX_FLOAT   48
+#define MAX_PART    400
+#define BANNER_TIME 2.2f
 #define MAX_LEVEL   3
 #define MAX_WAVES   20
 #define UPGRADE_UNLOCK_WAVE 5   /* melhorias so ficam disponiveis a partir desta onda */
@@ -233,6 +235,7 @@ typedef struct {
     int       invested;   /* total gasto (para calcular a venda) */
     float     cooldown;
     float     angle;      /* angulo do canhao em radianos */
+    float     recoil;     /* 1 logo apos atirar, cai ate 0 (animacao do tranco) */
 } Tower;
 
 typedef struct {
@@ -248,6 +251,7 @@ typedef struct {
     int     reward;
     float   radius;
     Color   color;
+    float   hitFlash;     /* pisca branco ao levar dano */
 } Enemy;
 
 typedef struct {
@@ -256,6 +260,9 @@ typedef struct {
     int     target, targetUid;
     float   damage, slow, speed, size, splash, poisonDps, poisonPct;
     Color   color;
+    int     kind;         /* planta que atirou (cada uma tem um tiro desenhado diferente) */
+    Vector2 dir;          /* direcao do movimento (para rastros e espinhos) */
+    float   total, done;  /* distancia total e percorrida (arco da abobora) */
 } Projectile;
 
 /* Efeito visual simples (explosao do canhao) */
@@ -265,6 +272,16 @@ typedef struct {
     float   radius, life, maxLife;
     Color   color;
 } Effect;
+
+/* Particula: faiscas, poeira, fumaca... */
+typedef struct {
+    bool    active;
+    Vector2 pos, vel;
+    float   life, maxLife;
+    float   size, grow;   /* tamanho inicial e multiplicador no fim da vida */
+    float   gravity;
+    Color   color;
+} Particle;
 
 /* Texto que sobe e some (ex.: "+$5" quando um inimigo morre) */
 typedef struct {
@@ -285,6 +302,12 @@ static Enemy      enemies[MAX_ENEMIES];
 static Projectile projs[MAX_PROJ];
 static Effect     effects[MAX_FX];
 static FloatText  floats[MAX_FLOAT];
+static Particle   parts[MAX_PART];
+static float      shake;                  /* tremida da tela quando a casa e atingida */
+static float      bannerTimer;            /* faixa animada no comeco de cada onda */
+static char       bannerText[24], bannerSub[48];
+static bool       bannerBoss;
+static float      smokeTimer;
 static float      baseFlash;              /* pisca a casa quando um inimigo chega */
 
 static int spawnC, spawnR, baseC, baseR;
@@ -336,6 +359,27 @@ static void ShowMessage(const char *text)
     strncpy(msgText, text, sizeof(msgText) - 1);
     msgText[sizeof(msgText) - 1] = '\0';
     msgTimer = 2.0f;
+}
+
+static float RandF(float a, float b) { return a + (b - a) * (GetRandomValue(0, 10000) / 10000.0f); }
+
+static void SpawnParticle(Vector2 pos, Vector2 vel, float life, float size, float grow, float gravity, Color color)
+{
+    for (int i = 0; i < MAX_PART; i++) {
+        if (parts[i].active) continue;
+        parts[i] = (Particle){ true, pos, vel, life, life, size, grow, gravity, color };
+        return;
+    }
+}
+
+/* Explosao de n particulas em todas as direcoes */
+static void Burst(Vector2 pos, int n, float speed, float life, float size, float gravity, Color color)
+{
+    for (int i = 0; i < n; i++) {
+        float an = RandF(0, 2 * PI), sp = RandF(speed * 0.35f, speed);
+        SpawnParticle(pos, (Vector2){ cosf(an) * sp, sinf(an) * sp }, RandF(life * 0.6f, life),
+                      RandF(size * 0.6f, size), 0.2f, gravity, color);
+    }
 }
 
 static void SpawnFloat(Vector2 pos, const char *text, Color color)
@@ -499,7 +543,10 @@ static void ResetGame(void)
     memset(projs, 0, sizeof(projs));
     memset(effects, 0, sizeof(effects));
     memset(floats, 0, sizeof(floats));
+    memset(parts, 0, sizeof(parts));
     baseFlash = 0;
+    shake = 0;
+    bannerTimer = 0;
     ComputeDistances(dist);
 
     money = LEVELS[currentLevel].startMoney;
@@ -554,7 +601,12 @@ static void StartWave(void)
     waveActive = true;
     waveSize = 6 + wave * 2;
     spawnedInWave = 0;
-    if (spawn2C >= 0 && wave == SECOND_ENTRANCE_WAVE) ShowMessage("NOVA ENTRADA ABERTA! Inimigos vêm pelos dois lados");
+    bannerTimer = BANNER_TIME;
+    bannerBoss = (wave % 5 == 0);
+    snprintf(bannerText, sizeof(bannerText), "ONDA %d", wave);
+    if (bannerBoss)                                          snprintf(bannerSub, sizeof(bannerSub), "Chefe: caracol gigante!");
+    else if (spawn2C >= 0 && wave == SECOND_ENTRANCE_WAVE)   snprintf(bannerSub, sizeof(bannerSub), "Nova entrada aberta!");
+    else                                                     snprintf(bannerSub, sizeof(bannerSub), "%d pragas a caminho", waveSize);
     selBuild = -1;   /* so da para plantar entre as ondas */
     spawnTimer = 0;
 }
@@ -610,9 +662,12 @@ static void DamageEnemy(Enemy *e, float dmg)
 {
     if (!e->active) return;
     e->hp -= dmg;
+    if (dmg > 0.5f) e->hitFlash = 0.1f;      /* o veneno (dano pequeno por frame) nao pisca */
     if (e->hp <= 0) {
         e->active = false;
         money += e->reward;
+        Burst(e->pos, e->kind == ENEMY_TANK ? 18 : 8, 70, 0.45f, e->kind == ENEMY_TANK ? 7 : 4.5f, 0, (Color){ 235, 230, 220, 200 });
+        Burst(e->pos, e->kind == ENEMY_TANK ? 12 : 5, 110, 0.55f, 3, 220, e->color);
         SpawnFloat(e->pos, TextFormat("+$%d", e->reward), (Color){ 255, 214, 80, 255 });
         if (e->kind == ENEMY_TANK) {
             AddSeeds(SEEDS_PER_TANK);
@@ -626,6 +681,8 @@ static void UpdateEnemies(float dt)
     for (int i = 0; i < MAX_ENEMIES; i++) {
         Enemy *e = &enemies[i];
         if (!e->active) continue;
+
+        if (e->hitFlash > 0) e->hitFlash -= dt;
 
         if (e->poisonTimer > 0) {
             e->poisonTimer -= dt;
@@ -648,6 +705,8 @@ static void UpdateEnemies(float dt)
                 e->active = false;
                 lives -= (e->kind == ENEMY_TANK) ? 5 : 1;
                 baseFlash = 0.4f;
+                shake = 0.35f;
+                Burst(TileCenter(baseC, baseR), 12, 110, 0.5f, 4, 0, (Color){ 230, 60, 50, 255 });
                 if (lives <= 0) { lives = 0; state = STATE_GAMEOVER; }
                 continue;
             }
@@ -670,6 +729,9 @@ static void FireProjectile(const Tower *t, Vector2 from, int targetIdx)
             .splash = TOWER_INFO[t->kind].splash, .poisonDps = TowerPoison(t),
             .poisonPct = TOWER_INFO[t->kind].poisonPct * (1.0f + UPG_DAMAGE * (t->level - 1)),
             .color = TOWER_INFO[t->kind].color,
+            .kind = t->kind,
+            .dir = Vector2Normalize(Vector2Subtract(enemies[targetIdx].pos, from)),
+            .total = fmaxf(1.0f, Vector2Distance(enemies[targetIdx].pos, from)),
         };
         return;
     }
@@ -682,6 +744,7 @@ static void UpdateTowers(float dt)
             Tower *t = &towers[r][c];
             if (!t->active) continue;
             if (t->cooldown > 0) t->cooldown -= dt;
+            if (t->recoil > 0) t->recoil = fmaxf(0, t->recoil - dt * 5);
 
             Vector2 ctr = TileCenter(c, r);
             float range = TowerRange(t);
@@ -706,6 +769,7 @@ static void UpdateTowers(float dt)
                 if (t->cooldown <= 0) {
                     FireProjectile(t, ctr, best);
                     t->cooldown = 1.0f / TowerFireRate(t);
+                    t->recoil = 1.0f;
                 }
             }
         }
@@ -731,6 +795,24 @@ static void UpdateEffects(float dt)
         if ((floats[i].life -= dt) <= 0) floats[i].active = false;
     }
     if (baseFlash > 0) baseFlash -= dt;
+    if (shake > 0) shake -= dt;
+    if (bannerTimer > 0) bannerTimer -= dt;
+
+    for (int i = 0; i < MAX_PART; i++) {
+        Particle *q = &parts[i];
+        if (!q->active) continue;
+        q->vel.y += q->gravity * dt;
+        q->vel = Vector2Scale(q->vel, 1.0f - 2.5f * dt);     /* resistencia do ar */
+        q->pos = Vector2Add(q->pos, Vector2Scale(q->vel, dt));
+        if ((q->life -= dt) <= 0) q->active = false;
+    }
+
+    /* fumacinha saindo da chamine da casa */
+    if ((smokeTimer -= dt) <= 0) {
+        smokeTimer = 0.35f;
+        Vector2 chimney = { baseC * TILE + 36.0f, baseR * TILE + 5.0f };
+        SpawnParticle(chimney, (Vector2){ RandF(-4, 4), -16 }, 1.8f, 3.5f, 2.6f, -3, (Color){ 225, 225, 220, 120 });
+    }
 }
 
 /* Aplica os efeitos de um projetil em um inimigo */
@@ -758,8 +840,13 @@ static void UpdateProjectiles(float dt)
 
         float step = p->speed * dt;
         float d = Vector2Distance(p->pos, e->pos);
+        if (d > 0.01f) p->dir = Vector2Scale(Vector2Subtract(e->pos, p->pos), 1.0f / d);
+        p->done += step;
+        if (p->done + d > p->total) p->total = p->done + d;   /* o alvo andou: o arco acompanha */
         if (d <= step + e->radius) {
+            Burst(e->pos, 4, 60, 0.25f, 2.5f, 0, p->color);
             if (p->splash > 0) {
+                Burst(e->pos, 16, 150, 0.45f, 4.5f, 80, (Color){ 255, 150, 40, 255 });
                 /* Dano em area: atinge todos os inimigos dentro do raio */
                 Vector2 hit = e->pos;
                 for (int j = 0; j < MAX_ENEMIES; j++)
@@ -866,7 +953,8 @@ static const Color UI_ACCENT = { 245, 200, 80, 255 };
 /* Numero pseudo-aleatorio fixo por tile (decoracao sempre igual) */
 static unsigned int Hash2(int a, int b)
 {
-    unsigned int h = (unsigned int)(a * 73856093) ^ (unsigned int)(b * 19349663);
+    /* conta feita em unsigned: estourar o limite e permitido e da a volta */
+    unsigned int h = ((unsigned int)a * 73856093u) ^ ((unsigned int)b * 19349663u);
     h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
     return h;
 }
@@ -1046,58 +1134,111 @@ static bool DrawButton(Rectangle rec, const char *line1, const char *line2, bool
 /* ---------- Mapa ---------- */
 static bool IsRoadAt(int c, int r) { return InBounds(c, r) && grid[r][c] == TILE_ROAD; }
 
+/* Ruido suave (value noise): numeros aleatorios fixos nos cantos de uma grade,
+   interpolados suavemente. Usado para manchas naturais na grama. */
+static float ValueNoise(float x, float y)
+{
+    int xi = (int)floorf(x), yi = (int)floorf(y);
+    float fx = x - xi, fy = y - yi;
+    float a = (Hash2(xi, yi) % 1000) / 999.0f,     b = (Hash2(xi + 1, yi) % 1000) / 999.0f;
+    float c = (Hash2(xi, yi + 1) % 1000) / 999.0f, d = (Hash2(xi + 1, yi + 1) % 1000) / 999.0f;
+    float ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+    return Lerp(Lerp(a, b, ux), Lerp(c, d, ux), uy);
+}
+
 static void DrawGrassTile(int c, int r)
 {
-    int v = (int)(Hash2(c, r) % 9) - 4;
-    Color base = ((r + c) % 2 == 0) ? LEVELS[currentLevel].grassA : LEVELS[currentLevel].grassB;
-    Color g = { (unsigned char)(base.r + v), (unsigned char)(base.g + v), (unsigned char)(base.b + v), 255 };
-    DrawRectangle(c * TILE, r * TILE, TILE, TILE, g);
+    const LevelInfo *lv = &LEVELS[currentLevel];
+    Color dark  = ColorBrightness(lv->grassB, -0.07f);
+    Color light = ColorBrightness(lv->grassA,  0.04f);
+    float seed = currentLevel * 7.3f + 3.1f;
+    const int SUB = 4, SZ = TILE / SUB;          /* 4x4 pedacinhos de 12 px: transicao suave */
+    for (int sy = 0; sy < SUB; sy++) {
+        for (int sx = 0; sx < SUB; sx++) {
+            float gx = c * SUB + sx + 0.5f, gy = r * SUB + sy + 0.5f;
+            float n = 0.75f * ValueNoise(gx / 10.0f + seed, gy / 10.0f + seed)
+                    + 0.25f * ValueNoise(gx / 3.0f + 50, gy / 3.0f + 50);
+            Color g = ColorLerp(dark, light, n);
+            DrawRectangle(c * TILE + sx * SZ, r * TILE + sy * SZ, SZ, SZ, g);
+        }
+    }
 }
 
 static void DrawGrassDecor(int c, int r)
 {
     unsigned int h = Hash2(c + 101, r + 37);
     int x = c * TILE, y = r * TILE;
-    Color blade = { 62, 124, 54, 255 };
-    for (int i = 0; i < 2; i++) {     /* tufos de capim */
-        int tx = x + 8 + (int)((h >> (i * 5)) % 30), ty = y + 14 + (int)((h >> (i * 7 + 3)) % 26);
-        DrawLine(tx, ty, tx - 3, ty - 6, blade);
-        DrawLine(tx, ty, tx, ty - 8, blade);
-        DrawLine(tx, ty, tx + 3, ty - 6, blade);
+    float tm = (float)GetTime();
+    Color blade = ColorBrightness(LEVELS[currentLevel].grassB, -0.32f);
+    for (int i = 0; i < 2; i++) {     /* tufos de capim balancando com o vento */
+        float tx = x + 8.0f + (h >> (i * 5)) % 30, ty = y + 14.0f + (h >> (i * 7 + 3)) % 26;
+        float sw = sinf(tm * 2.2f + tx * 0.15f + ty * 0.1f) * 1.6f;
+        DrawLineV((Vector2){ tx, ty }, (Vector2){ tx - 3 + sw, ty - 6 }, blade);
+        DrawLineV((Vector2){ tx, ty }, (Vector2){ tx + sw, ty - 8 }, blade);
+        DrawLineV((Vector2){ tx, ty }, (Vector2){ tx + 3 + sw, ty - 6 }, blade);
     }
     if (h % 6 == 0) {                 /* florzinha */
         int fx = x + 10 + (int)((h >> 9) % 28), fy = y + 10 + (int)((h >> 13) % 28);
         Color pet = (h % 3 == 0) ? (Color){ 250, 250, 250, 255 }
                   : (h % 3 == 1) ? (Color){ 255, 214, 90, 255 } : (Color){ 240, 140, 190, 255 };
+        DrawCircle(fx + 1, fy + 2, 4.5f, Fade(BLACK, 0.10f));
         DrawCircle(fx + 3, fy, 2.5f, pet); DrawCircle(fx - 3, fy, 2.5f, pet);
         DrawCircle(fx, fy + 3, 2.5f, pet); DrawCircle(fx, fy - 3, 2.5f, pet);
         DrawCircle(fx, fy, 1.8f, (Color){ 230, 160, 40, 255 });
     }
 }
 
-static void DrawRoadTile(int c, int r, bool closed)
+/* Desenha a estrada inteira como uma faixa continua: um circulo em cada tile e
+   um retangulo ligando tiles vizinhos. Assim as curvas ficam arredondadas. */
+static void DrawRoadShape(float offY, float half, Color col)
 {
-    int x = c * TILE, y = r * TILE;
-    Color dirt = { 188, 152, 104, 255 }, edge = { 142, 110, 72, 255 };
-    DrawRectangle(x, y, TILE, TILE, dirt);
-    if (!IsRoadAt(c, r - 1)) DrawRectangle(x, y, TILE, 4, edge);
-    if (!IsRoadAt(c, r + 1)) DrawRectangle(x, y + TILE - 4, TILE, 4, edge);
-    if (!IsRoadAt(c - 1, r)) DrawRectangle(x, y, 4, TILE, edge);
-    if (!IsRoadAt(c + 1, r)) DrawRectangle(x + TILE - 4, y, 4, TILE, edge);
-
-    unsigned int h = Hash2(c * 7 + 3, r * 11 + 5);
-    for (int i = 0; i < 3; i++) {     /* pedrinhas */
-        int px = x + 9 + (int)((h >> (i * 6)) % 30), py = y + 9 + (int)((h >> (i * 6 + 3)) % 30);
-        DrawCircle(px, py, 1.5f + (float)((h >> (i + 20)) % 2), (Color){ 160, 128, 88, 255 });
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            if (!IsRoadAt(c, r)) continue;
+            Vector2 p = TileCenter(c, r);
+            p.y += offY;
+            DrawCircleV(p, half, col);
+            if (IsRoadAt(c + 1, r)) DrawRectangleRec((Rectangle){ p.x, p.y - half, (float)TILE, half * 2 }, col);
+            if (IsRoadAt(c, r + 1)) DrawRectangleRec((Rectangle){ p.x - half, p.y, half * 2, (float)TILE }, col);
+            /* entradas e casa na borda do mapa: a estrada vai ate a borda */
+            if (c == 0)        DrawRectangleRec((Rectangle){ 0, p.y - half, p.x, half * 2 }, col);
+            if (c == COLS - 1) DrawRectangleRec((Rectangle){ p.x, p.y - half, TILE / 2.0f, half * 2 }, col);
+            if (r == 0)        DrawRectangleRec((Rectangle){ p.x - half, 0, half * 2, p.y }, col);
+            if (r == ROWS - 1) DrawRectangleRec((Rectangle){ p.x - half, p.y, half * 2, TILE / 2.0f }, col);
+        }
     }
+}
 
-    if (closed) {                     /* estrada ainda fechada: coberta de mato */
-        DrawRectangle(x, y, TILE, TILE, (Color){ 86, 140, 70, 210 });
-        Color blade = { 54, 110, 46, 255 };
-        for (int i = 0; i < 6; i++) {
-            int bx = x + 4 + i * 8, by = y + 32 + (int)((h >> i) % 12);
-            DrawLine(bx, by, bx - 2, by - 13, blade);
-            DrawLine(bx + 2, by, bx + 4, by - 10, blade);
+static void DrawRoads(void)
+{
+    DrawRoadShape(3, 23, Fade(BLACK, 0.16f));               /* sombra */
+    DrawRoadShape(0, 22, (Color){ 128, 96, 60, 255 });      /* borda */
+    DrawRoadShape(0, 19, (Color){ 192, 156, 108, 255 });    /* terra */
+    DrawRoadShape(0, 9,  (Color){ 204, 170, 122, 255 });    /* faixa gasta no meio */
+
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            if (!IsRoadAt(c, r)) continue;
+            Vector2 p = TileCenter(c, r);
+            unsigned int h = Hash2(c * 7 + 3, r * 11 + 5);
+            for (int i = 0; i < 3; i++) {   /* pedrinhas */
+                float px = p.x - 13 + (h >> (i * 6)) % 26, py = p.y - 13 + (h >> (i * 6 + 3)) % 26;
+                float rad = 1.4f + (float)((h >> (i + 20)) % 2);
+                DrawCircleV((Vector2){ px + 0.8f, py + 0.8f }, rad, (Color){ 150, 118, 80, 255 });
+                DrawCircleV((Vector2){ px, py }, rad, (Color){ 176, 144, 102, 255 });
+            }
+            if (branchRoad[r][c] && !SecondEntranceOpen()) {   /* estrada ainda fechada: coberta de mato */
+                Color g = ColorBrightness(LEVELS[currentLevel].grassB, -0.05f);
+                DrawRectangle(c * TILE, r * TILE, TILE, TILE, Fade(g, 0.9f));
+                Color blade = ColorBrightness(LEVELS[currentLevel].grassB, -0.35f);
+                float tm = (float)GetTime();
+                for (int i = 0; i < 6; i++) {
+                    float bx = c * TILE + 5.0f + i * 7.5f, by = r * TILE + 34.0f + (h >> i) % 10;
+                    float sw = sinf(tm * 2 + bx * 0.2f) * 2;
+                    DrawLineEx((Vector2){ bx, by }, (Vector2){ bx - 2 + sw, by - 14 }, 1.5f, blade);
+                    DrawLineEx((Vector2){ bx + 2, by }, (Vector2){ bx + 4 + sw, by - 10 }, 1.5f, blade);
+                }
+            }
         }
     }
 }
@@ -1151,6 +1292,8 @@ static void DrawHouse(int c, int r)
     Color wall = hit ? (Color){ 255, 120, 110, 255 } : (Color){ 242, 228, 198, 255 };
     DrawEllipse((int)x + 24, (int)y + 45, 22, 5, Fade(BLACK, 0.25f));
     DrawRectangle((int)x + 8, (int)y + 20, 32, 25, wall);
+    DrawRectangle((int)x + 32, (int)y + 5, 7, 13, (Color){ 150, 70, 56, 255 });
+    DrawRectangle((int)x + 31, (int)y + 4, 9, 3, (Color){ 120, 56, 46, 255 });
     DrawTriangle((Vector2){ x + 24, y + 3 }, (Vector2){ x + 2, y + 22 }, (Vector2){ x + 46, y + 22 }, (Color){ 196, 64, 52, 255 });
     DrawRectangle((int)x + 20, (int)y + 31, 9, 14, (Color){ 120, 78, 44, 255 });
     DrawCircle((int)x + 27, (int)y + 38, 1.2f, UI_ACCENT);
@@ -1164,13 +1307,15 @@ static void DrawMap(void)
         for (int c = 0; c < COLS; c++)
             DrawGrassTile(c, r);
 
-    for (int r = 0; r < ROWS; r++) {
-        for (int c = 0; c < COLS; c++) {
-            if (grid[r][c] == TILE_ROAD)       DrawRoadTile(c, r, branchRoad[r][c] && !SecondEntranceOpen());
-            else if (grid[r][c] == TILE_ROCK)  DrawRock(c, r);
-            else if (grid[r][c] == TILE_EMPTY) DrawGrassDecor(c, r);
-        }
-    }
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            if (grid[r][c] == TILE_EMPTY) DrawGrassDecor(c, r);
+
+    DrawRoads();
+
+    for (int r = 0; r < ROWS; r++)
+        for (int c = 0; c < COLS; c++)
+            if (grid[r][c] == TILE_ROCK) DrawRock(c, r);
 
     /* Caminho atual: pontinhos andando da entrada ate a base (segue a BFS) */
     float phase = fmodf((float)GetTime() * 1.2f, 1.0f);
@@ -1186,7 +1331,7 @@ static void DrawMap(void)
             Vector2 a = TileCenter(c, r), b = TileCenter(bc, br);
             for (int j = 0; j < 4; j++) {
                 float u = (j + phase) / 4.0f;
-                DrawCircleV(Vector2Lerp(a, b, u), 2.0f, Fade(WHITE, 0.35f));
+                DrawCircleV(Vector2Lerp(a, b, u), 1.8f, Fade(WHITE, 0.28f));
             }
             c = bc; r = br;
         }
@@ -1204,6 +1349,22 @@ static void DrawMap(void)
             for (int cc = 0; cc < COLS; cc++)
                 if (dist[rr][cc] < INF)
                     DesenharTexto(TextFormat("%d", dist[rr][cc]), cc * TILE + 4, rr * TILE + 4, 10, Fade(BLACK, 0.7f));
+    }
+}
+
+/* Sombras de nuvens passando devagar sobre o mapa */
+static void DrawClouds(void)
+{
+    float tm = (float)GetTime();
+    for (int i = 0; i < 4; i++) {
+        float span = SCREEN_W + 520.0f;
+        float x = fmodf(tm * (9 + i * 3) + i * 340, span) - 260;
+        float y = 70 + i * 135 + sinf(tm * 0.1f + i) * 18;
+        for (int k = 0; k < 3; k++) {
+            float bx = x + (k - 1) * 62, by = y + (k == 1 ? -14 : 0);
+            DrawEllipse((int)bx, (int)by, 78, 36, Fade(BLACK, 0.035f));
+            DrawEllipse((int)bx, (int)by, 56, 26, Fade(BLACK, 0.03f));
+        }
     }
 }
 
@@ -1308,18 +1469,52 @@ static void DrawLevelPips(float x, float y, int level)
 
 static void DrawTowers(void)
 {
-    if (selC >= 0) {
+    float tm = (float)GetTime();
+
+    if (selC >= 0) {   /* alcance da planta selecionada: circulo tracejado girando */
         Tower *t = &towers[selR][selC];
         Vector2 ctr = TileCenter(selC, selR);
-        DrawCircleV(ctr, TowerRange(t), Fade(WHITE, 0.10f));
-        DrawCircleLinesV(ctr, TowerRange(t), Fade(WHITE, 0.8f));
+        float R = TowerRange(t), rot = tm * 18;
+        DrawCircleV(ctr, R, Fade(WHITE, 0.09f));
+        for (int k = 0; k < 36; k++) {
+            float a0 = rot + k * 10;
+            DrawRing(ctr, R - 1.5f, R + 1.0f, a0, a0 + 6, 3, Fade(WHITE, 0.85f));
+        }
     }
 
     for (int r = 0; r < ROWS; r++) {
         for (int c = 0; c < COLS; c++) {
             Tower *t = &towers[r][c];
             if (!t->active) continue;
-            DrawPlant(t->kind, TileCenter(c, r), 1.0f, t->angle, false);
+            Vector2 p = TileCenter(c, r);
+            unsigned int h = Hash2(c * 13, r * 7);
+            float ph = (h % 628) / 100.0f;
+            Vector2 dir = { cosf(t->angle), sinf(t->angle) };
+            float rc = t->recoil;
+
+            /* aura de nivel: prateada no nivel 2, dourada pulsando no nivel 3 */
+            if (t->level >= 2) {
+                Color aura = t->level == 3 ? (Color){ 255, 210, 80, 255 } : (Color){ 200, 230, 255, 255 };
+                float pulse = 0.5f + 0.5f * sinf(tm * 3 + ph);
+                DrawCircleGradient((Vector2){ p.x, p.y + 4 }, 22 + 3 * pulse, Fade(aura, t->level == 3 ? 0.40f : 0.20f), Fade(aura, 0.0f));
+            }
+            DrawEllipse((int)p.x, (int)p.y + 15, 16, 5, Fade(BLACK, 0.18f));
+
+            /* balanco suave + tranco para tras ao atirar; planta cresce com o nivel */
+            float bob = sinf(tm * 2.0f + ph) * 1.2f;
+            Vector2 pp = { p.x - dir.x * 3 * rc, p.y + bob - dir.y * 3 * rc };
+            float s = 1.0f + 0.07f * rc + (t->level - 1) * 0.06f;
+            DrawPlant(t->kind, pp, s, t->angle, false);
+
+            if (rc > 0.55f) {   /* brilho do disparo */
+                Vector2 m = { pp.x + dir.x * 17 * s, pp.y - 3 + dir.y * 17 * s };
+                DrawCircleV(m, 9 * rc, Fade(TOWER_INFO[t->kind].color, 0.35f * rc));
+                DrawCircleV(m, 4.5f * rc, Fade(WHITE, 0.85f * rc));
+            }
+            if (t->level == 3 && (int)(tm * 3 + ph) % 4 == 0) {   /* brilhinho do nivel maximo */
+                float u = fmodf(tm * 3 + ph, 1.0f);
+                DrawCircleV((Vector2){ p.x + 12 * cosf(ph * 3), p.y - 12 - u * 8 }, 2 * (1 - u), Fade((Color){ 255, 240, 160, 255 }, 1 - u));
+            }
             DrawLevelPips(c * TILE + 12.0f, r * TILE + TILE - 7.0f, t->level);
         }
     }
@@ -1418,6 +1613,8 @@ static void DrawEnemy(const Enemy *e)
     }
 #undef AT
 
+    if (e->hitFlash > 0) DrawCircleV(p, R * 1.1f, Fade(WHITE, 0.75f * e->hitFlash / 0.1f));
+
     if (e->slowTimer > 0)
         DrawRing(p, R + 2, R + 4, 0, 360, 24, Fade(SKYBLUE, 0.75f));
     if (e->poisonTimer > 0)
@@ -1440,19 +1637,91 @@ static void DrawEnemies(void)
         if (enemies[i].active) DrawEnemy(&enemies[i]);
 }
 
+/* Cada planta tem um tiro com desenho proprio */
+static void DrawProjectile(const Projectile *pr)
+{
+    Vector2 p = pr->pos;
+    Vector2 d = (Vector2Length(pr->dir) > 0.1f) ? pr->dir : (Vector2){ 1, 0 };
+    Vector2 back = { -d.x, -d.y };
+
+    switch (pr->kind) {
+        case TOWER_BASIC: {    /* semente com rastro */
+            for (int k = 3; k >= 1; k--)
+                DrawCircleV(Vector2Add(p, Vector2Scale(back, k * 4.0f)), pr->size * (1 - k * 0.2f), Fade((Color){ 140, 220, 90, 255 }, 0.4f - k * 0.1f));
+            DrawCircleV(p, pr->size + 0.5f, (Color){ 70, 140, 50, 255 });
+            DrawCircleV(p, pr->size, (Color){ 130, 210, 80, 255 });
+            DrawCircleV((Vector2){ p.x - 1.2f, p.y - 1.2f }, pr->size * 0.4f, Fade(WHITE, 0.7f));
+        } break;
+
+        case TOWER_SNIPER: {   /* espinho */
+            Vector2 tail = Vector2Add(p, Vector2Scale(back, 13));
+            DrawLineEx(tail, p, 3.0f, Fade(BLACK, 0.25f));
+            DrawLineEx(tail, p, 2.2f, (Color){ 238, 232, 200, 255 });
+            DrawCircleV(p, 1.5f, (Color){ 110, 80, 50, 255 });
+        } break;
+
+        case TOWER_FROST: {    /* floquinho de gelo girando */
+            float rot = (float)GetTime() * 8;
+            DrawCircleV(p, 7, Fade(SKYBLUE, 0.25f));
+            for (int k = 0; k < 3; k++) {
+                float an = rot + k * PI / 3;
+                Vector2 o = { cosf(an) * 5, sinf(an) * 5 };
+                DrawLineEx(Vector2Subtract(p, o), Vector2Add(p, o), 1.6f, WHITE);
+            }
+            DrawCircleV(p, 1.8f, (Color){ 200, 240, 255, 255 });
+        } break;
+
+        case TOWER_CANNON: {   /* mini abobora voando em arco */
+            float u = Clamp(pr->done / pr->total, 0, 1);
+            float hgt = sinf(PI * u) * 24;
+            DrawEllipse((int)p.x, (int)p.y + 3, 5 + hgt * 0.05f, 2, Fade(BLACK, 0.25f));
+            Vector2 q = { p.x, p.y - hgt };
+            DrawCircleV(q, 6.5f, (Color){ 200, 100, 10, 255 });
+            DrawCircleV(q, 5.5f, (Color){ 246, 140, 24, 255 });
+            DrawLineEx((Vector2){ q.x, q.y - 5 }, (Vector2){ q.x + 1.5f, q.y - 9 }, 2, (Color){ 60, 120, 40, 255 });
+            DrawCircleV((Vector2){ q.x - 2, q.y - 2 }, 1.8f, Fade(WHITE, 0.45f));
+        } break;
+
+        case TOWER_POISON: {   /* gota de veneno pingando */
+            for (int k = 2; k >= 1; k--)
+                DrawCircleV(Vector2Add(p, Vector2Scale(back, k * 5.0f)), 2.2f - k * 0.5f, Fade((Color){ 170, 90, 200, 255 }, 0.5f - k * 0.15f));
+            DrawCircleV(p, pr->size + 1.2f, (Color){ 120, 40, 150, 255 });
+            DrawCircleV(p, pr->size, (Color){ 160, 70, 190, 255 });
+            DrawCircleV((Vector2){ p.x - 1, p.y - 1 }, pr->size * 0.45f, (Color){ 190, 255, 120, 255 });
+        } break;
+
+        case TOWER_LASER: {    /* raio de sol */
+            Vector2 tail = Vector2Add(p, Vector2Scale(back, 18));
+            DrawLineEx(tail, p, 7, Fade((Color){ 255, 220, 60, 255 }, 0.25f));
+            DrawLineEx(tail, p, 2.6f, (Color){ 255, 242, 160, 255 });
+            DrawCircleV(p, 2.6f, WHITE);
+        } break;
+
+        default:
+            DrawCircleV(p, pr->size, pr->color);
+            break;
+    }
+}
+
 static void DrawProjectiles(void)
 {
     for (int i = 0; i < MAX_PROJ; i++)
-        if (projs[i].active) {
-            DrawCircleV(projs[i].pos, projs[i].size + 2, Fade(projs[i].color, 0.3f));
-            DrawCircleV(projs[i].pos, projs[i].size, projs[i].color);
-        }
+        if (projs[i].active) DrawProjectile(&projs[i]);
 
     for (int i = 0; i < MAX_FX; i++)
         if (effects[i].active) {
             float a = effects[i].life / effects[i].maxLife;
-            DrawCircleV(effects[i].pos, effects[i].radius * (1.2f - 0.4f * a), Fade(effects[i].color, 0.40f * a));
-            DrawRing(effects[i].pos, effects[i].radius * (1.2f - 0.4f * a) - 3, effects[i].radius * (1.2f - 0.4f * a), 0, 360, 32, Fade(YELLOW, 0.6f * a));
+            float rad = effects[i].radius * (1.2f - 0.4f * a);
+            DrawCircleGradient(effects[i].pos, rad, Fade((Color){ 255, 220, 120, 255 }, 0.55f * a), Fade(effects[i].color, 0.15f * a));
+            DrawRing(effects[i].pos, rad - 3, rad, 0, 360, 32, Fade(YELLOW, 0.6f * a));
+        }
+
+    for (int i = 0; i < MAX_PART; i++)
+        if (parts[i].active) {
+            const Particle *q = &parts[i];
+            float a = q->life / q->maxLife;
+            float rad = q->size * (q->grow + (1 - q->grow) * a);
+            DrawCircleV(q->pos, rad, Fade(q->color, a * q->color.a / 255.0f));
         }
 
     for (int i = 0; i < MAX_FLOAT; i++)
@@ -1463,6 +1732,82 @@ static void DrawProjectiles(void)
 }
 
 /* ---------- Interface ---------- */
+/* Escurece levemente as bordas do mapa; fica vermelho quando a casa esta em perigo */
+static void DrawMapVignette(bool live)
+{
+    int e = 60;
+    Color dark = Fade(BLACK, 0.22f);
+    DrawRectangleGradientV(0, 0, SCREEN_W, e, dark, BLANK);
+    DrawRectangleGradientV(0, GRID_H - e, SCREEN_W, e, BLANK, dark);
+    DrawRectangleGradientH(0, 0, e, GRID_H, dark, BLANK);
+    DrawRectangleGradientH(SCREEN_W - e, 0, e, GRID_H, BLANK, dark);
+
+    float danger = 0;
+    if (live && lives <= 5) danger = 0.22f + 0.12f * sinf((float)GetTime() * 5);
+    if (baseFlash > 0) danger = fmaxf(danger, baseFlash / 0.4f * 0.55f);
+    if (danger > 0) {
+        int d = 80;
+        Color red = Fade((Color){ 210, 20, 20, 255 }, danger);
+        DrawRectangleGradientV(0, 0, SCREEN_W, d, red, BLANK);
+        DrawRectangleGradientV(0, GRID_H - d, SCREEN_W, d, BLANK, red);
+        DrawRectangleGradientH(0, 0, d, GRID_H, red, BLANK);
+        DrawRectangleGradientH(SCREEN_W - d, 0, d, GRID_H, BLANK, red);
+    }
+}
+
+/* Contador de pragas restantes no canto superior direito */
+static void DrawWaveCounter(void)
+{
+    if (!waveActive) return;
+    int alive = 0;
+    for (int i = 0; i < MAX_ENEMIES; i++) if (enemies[i].active) alive++;
+    int remaining = (waveSize - spawnedInWave) + alive;
+    Rectangle pill = { SCREEN_W - 182.0f, 10, 172, 32 };
+    DrawRectangleRounded((Rectangle){ pill.x + 2, pill.y + 3, pill.width, pill.height }, 0.5f, 8, Fade(BLACK, 0.3f));
+    DrawRectangleRounded(pill, 0.5f, 8, Fade(UI_BG, 0.9f));
+    DrawRectangleRoundedLinesEx(pill, 0.5f, 8, 1.5f, UI_BORDER);
+    Vector2 bug = { pill.x + 19, pill.y + 17 };   /* joaninha vista de cima */
+    Color dk = { 30, 20, 20, 255 };
+    DrawCircleV((Vector2){ bug.x, bug.y - 6 }, 3.6f, dk);
+    DrawCircleV(bug, 7, (Color){ 215, 50, 42, 255 });
+    DrawLineEx((Vector2){ bug.x, bug.y - 5 }, (Vector2){ bug.x, bug.y + 7 }, 1.2f, dk);
+    DrawCircleV((Vector2){ bug.x - 3.2f, bug.y - 1 }, 1.5f, dk);
+    DrawCircleV((Vector2){ bug.x + 3.2f, bug.y - 1 }, 1.5f, dk);
+    DrawCircleV((Vector2){ bug.x - 2.8f, bug.y + 3.5f }, 1.3f, dk);
+    DrawCircleV((Vector2){ bug.x + 2.8f, bug.y + 3.5f }, 1.3f, dk);
+    DrawCircleV((Vector2){ bug.x - 2.5f, bug.y - 3.5f }, 1.6f, Fade(WHITE, 0.35f));
+    DesenharTexto(TextFormat("%d restante%s", remaining, remaining == 1 ? "" : "s"), (int)pill.x + 36, (int)pill.y + 8, 16, UI_TEXT);
+}
+
+/* Faixa que entra deslizando no comeco de cada onda */
+static void DrawWaveBanner(void)
+{
+    if (bannerTimer <= 0) return;
+    float since = BANNER_TIME - bannerTimer;
+    float in = fminf(since / 0.35f, 1.0f), out = fminf(bannerTimer / 0.35f, 1.0f);
+    float ease = 1 - powf(1 - in, 3);
+    float w = 460, h = 92;
+    float x = -w + (SCREEN_W / 2.0f + w / 2) * ease + (1 - out) * (SCREEN_W / 2.0f + w / 2);
+    float y = GRID_H / 2.0f - h / 2 - 70;
+    Color band = bannerBoss ? (Color){ 150, 38, 34, 255 } : (Color){ 38, 66, 42, 255 };
+    Color edge = bannerBoss ? (Color){ 245, 120, 90, 255 } : UI_ACCENT;
+
+    /* pontas da fita */
+    DrawTriangle((Vector2){ x - 24, y + 14 }, (Vector2){ x + 10, y + h + 10 }, (Vector2){ x + 10, y + 14 }, ColorBrightness(band, -0.3f));
+    DrawTriangle((Vector2){ x + w - 10, y + 14 }, (Vector2){ x + w - 10, y + h + 10 }, (Vector2){ x + w + 24, y + 14 }, ColorBrightness(band, -0.3f));
+    DrawRectangleRounded((Rectangle){ x + 3, y + 6, w, h }, 0.2f, 8, Fade(BLACK, 0.35f));
+    DrawRectangleRounded((Rectangle){ x, y, w, h }, 0.2f, 8, band);
+    DrawRectangleRounded((Rectangle){ x + 4, y + 4, w - 8, h * 0.4f }, 0.4f, 8, Fade(WHITE, 0.07f));
+    DrawRectangleRoundedLinesEx((Rectangle){ x, y, w, h }, 0.2f, 8, 3, edge);
+
+    float pulse = bannerBoss ? 1.0f + 0.05f * sinf(since * 12) : 1.0f;
+    int fs = (int)(46 * pulse);
+    int tw = MedirTexto(bannerText, fs);
+    DrawTextShadow(bannerText, (int)(x + (w - tw) / 2), (int)(y + 10), fs, bannerBoss ? (Color){ 255, 220, 200, 255 } : UI_ACCENT);
+    int sw = MedirTexto(bannerSub, 18);
+    DrawTextShadow(bannerSub, (int)(x + (w - sw) / 2), (int)(y + 62), 18, UI_TEXT);
+}
+
 static void DrawToast(int y)
 {
     if (msgTimer <= 0) return;
@@ -1537,6 +1882,8 @@ static void DrawUI(void)
     int y0 = GRID_H;
     Vector2 mouse = GetMousePosition();
 
+    DrawMapVignette(live);
+    if (live) DrawWaveCounter();
     if (live && selC >= 0) DrawSelectionCard();
 
     /* Barra inferior */
@@ -1635,6 +1982,7 @@ static void DrawUI(void)
     if (DrawButton((Rectangle){ rx, y0 + 84.0f, 280, 34 }, "Loja de plantas [L]", NULL, live, false))
         OpenShop();
 
+    if (live) DrawWaveBanner();
     if (live && hovered >= 0) DrawPlantTooltip(hovered, 170.0f + hovered * 82, y0);
     if (live) DrawToast(12);
 }
@@ -1975,11 +2323,24 @@ int main(void)
 
         BeginDrawing();
         ClearBackground(BLACK);
+
+        /* O mapa e desenhado com uma camera 2D: quando a casa e atingida,
+           a camera treme por um instante */
+        Camera2D cam = { 0 };
+        cam.zoom = 1.0f;
+        if (shake > 0 && state == STATE_PLAYING)
+            cam.offset = (Vector2){ RandF(-1, 1) * shake * 14, RandF(-1, 1) * shake * 14 };
+        BeginScissorMode(0, 0, SCREEN_W, GRID_H);
+        BeginMode2D(cam);
         DrawMap();
         DrawBuildPreview();
         DrawTowers();
         DrawEnemies();
         DrawProjectiles();
+        DrawClouds();
+        EndMode2D();
+        EndScissorMode();
+
         DrawUI();
         DrawOverlay();
         EndDrawing();
