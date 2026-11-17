@@ -24,6 +24,7 @@ Sobreviver às **20 ondas** de inimigos sem perder todas as **20 vidas**.
 
 Tudo é desenhado com as formas do raylib (círculos, retângulos arredondados, linhas), sem nenhuma imagem externa:
 
+- **Fonte:** os textos usam a **Fredoka**, uma fonte arredondada que combina com o tema de jardim. Ela fica em `fonts/Fredoka.ttf` (licença livre SIL Open Font License, em `fonts/OFL.txt`) e é suavizada com mipmaps. O raylib só lê o peso mais fino desse arquivo, então o jogo simula um negrito desenhando o texto com um pequeno deslocamento (mais forte nos títulos). Graças a ela, os textos do jogo têm os acentos do português (Abóbora, Nível, Próxima onda...). Se a pasta `fonts/` não estiver junto do jogo, ele usa a Segoe UI do Windows e, sem ela, a fonte padrão do raylib (que não tem acentos).
 - **Mapa de jardim:** grama com tufos e florzinhas, estrada de terra com bordas e pedrinhas, pedras com sombra, uma **casinha** como base (pisca em vermelho quando perde vida) e **tocas** de onde saem as pragas. Pontinhos animados mostram o caminho calculado pela BFS.
 - **Pragas animadas:** besouro (normal), formiga (rápida) e caracol gigante (chefe), com perninhas que se mexem e viram na direção em que andam. A barra de vida aparece quando a praga leva dano. Inimigos lentos ganham um anel azul, e envenenados soltam bolhas verdes.
 - **Barra inferior:** painel com ícones de moeda, semente, coração e bandeira, mais uma barra de progresso da onda. Os botões das plantas mostram o desenho, o nome e o preço. Passar o mouse num botão mostra uma **dica** com os atributos.
@@ -140,7 +141,7 @@ Abra `Projeto-PIF-TowerDefense.c` no Notepad++ que vem com o raylib e pressione 
 C:\raylib\w64devkit\bin\gcc Projeto-PIF-TowerDefense.c -o Projeto-PIF-TowerDefense.exe -O2 -Wall -std=c99 -IC:\raylib\raylib\src -LC:\raylib\raylib\src -lraylib -lopengl32 -lgdi32 -lwinmm
 ```
 
-Depois execute:
+Depois execute (a pasta `fonts/` precisa ficar junto do `.exe` para o jogo usar a fonte Fredoka):
 ```bash
 Projeto-PIF-TowerDefense.exe
 ```

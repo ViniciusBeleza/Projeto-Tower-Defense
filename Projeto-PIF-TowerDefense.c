@@ -146,13 +146,13 @@ static const TowerInfo TOWER_INFO[TOWER_COUNT] = {
     { .name = "Menta",    .desc = "Folhas geladas deixam lento",
       .cost = 70,  .seedPrice = 4, .range = 100, .fireRate = 1.0f, .damage = 4,  .projSpeed = 350, .projSize = 4,
       .slow = 0.5f, .color = { 120, 225, 205, 255 } },
-    { .name = "Abobora",  .desc = "Abobora explosiva: dano em area",
+    { .name = "Abóbora",  .desc = "Abóbora explosiva: dano em área",
       .cost = 140, .seedPrice = 14, .range = 130, .fireRate = 0.6f, .damage = 22, .projSpeed = 300, .projSize = 7,
       .splash = 55, .color = { 255, 140, 0, 255 } },
-    { .name = "Urtiga",   .desc = "Espinhos venenosos: dano continuo",
+    { .name = "Urtiga",   .desc = "Espinhos venenosos: dano contínuo",
       .cost = 70,  .seedPrice = 6, .range = 110, .fireRate = 1.0f, .damage = 2,  .projSpeed = 380, .projSize = 4,
       .poisonDps = 8, .poisonPct = POISON_PCT, .color = { 155, 70, 175, 255 } },
-    { .name = "Girassol", .desc = "Raios de sol muito rapidos",
+    { .name = "Girassol", .desc = "Raios de sol muito rápidos",
       .cost = 75,  .seedPrice = 10, .range = 150, .fireRate = 6.0f, .damage = 3,  .projSpeed = 1200, .projSize = 2,
       .color = { 255, 210, 0, 255 } },
 };
@@ -403,9 +403,9 @@ static bool CanPlace(int c, int r, const char **reason)
     if (waveActive && grid[r][c] == TILE_EMPTY) { *reason = "Espere a onda terminar para plantar"; return false; }
     switch (grid[r][c]) {
         case TILE_EMPTY: return true;
-        case TILE_ROAD:  *reason = "Nao pode plantar na estrada!"; return false;
-        case TILE_ROCK:  *reason = "Nao pode plantar na pedra";    return false;
-        default:         *reason = "Tile ocupado";                    return false;
+        case TILE_ROAD:  *reason = "Não pode plantar na estrada!"; return false;
+        case TILE_ROCK:  *reason = "Não pode plantar na pedra";    return false;
+        default:         *reason = "Espaço ocupado";                    return false;
     }
 }
 
@@ -450,7 +450,7 @@ static void UpgradeSelected(void)
     if (selC < 0) return;
     Tower *t = &towers[selR][selC];
     if (!upgradesUnlocked) { ShowMessage(TextFormat("Melhorias liberadas na onda %d", UPGRADE_UNLOCK_WAVE)); return; }
-    if (t->level >= MAX_LEVEL) { ShowMessage("Nivel maximo"); return; }
+    if (t->level >= MAX_LEVEL) { ShowMessage("Nível máximo"); return; }
     int cost = UpgradeCost(t);
     if (money < cost) { ShowMessage("Dinheiro insuficiente"); return; }
     money -= cost;
@@ -475,7 +475,7 @@ static void StartWave(void)
     waveActive = true;
     waveSize = 6 + wave * 2;
     spawnedInWave = 0;
-    if (spawn2C >= 0 && wave == SECOND_ENTRANCE_WAVE) ShowMessage("NOVA ENTRADA ABERTA! Inimigos vem pelos dois lados");
+    if (spawn2C >= 0 && wave == SECOND_ENTRANCE_WAVE) ShowMessage("NOVA ENTRADA ABERTA! Inimigos vêm pelos dois lados");
     selBuild = -1;   /* so da para plantar entre as ondas */
     spawnTimer = 0;
 }
@@ -537,7 +537,7 @@ static void DamageEnemy(Enemy *e, float dmg)
         SpawnFloat(e->pos, TextFormat("+$%d", e->reward), (Color){ 255, 214, 80, 255 });
         if (e->kind == ENEMY_TANK) {
             AddSeeds(SEEDS_PER_TANK);
-            ShowMessage(TextFormat("Tanque destruido! +%d sementes", SEEDS_PER_TANK));
+            ShowMessage(TextFormat("Tanque destruído! +%d sementes", SEEDS_PER_TANK));
         }
     }
 }
@@ -720,7 +720,7 @@ static void UpdateWave(float dt)
     AddSeeds(seedBonus);
     if (wave >= MAX_WAVES) state = STATE_VICTORY;
     else if (spawn2C >= 0 && wave == SECOND_ENTRANCE_WAVE - 1)
-        ShowMessage("Atencao: na proxima onda abre uma NOVA ENTRADA!");
+        ShowMessage("Atenção: na próxima onda abre uma NOVA ENTRADA!");
     else ShowMessage(TextFormat("Onda %d completa! +$%d  +%d semente(s)", wave, bonus, seedBonus));
 
     /* Libera as melhorias antes da onda UPGRADE_UNLOCK_WAVE e mostra o tutorial */
@@ -735,7 +735,7 @@ static void HandleInput(void)
     for (int i = 0; i < TOWER_COUNT; i++) {
         if (!IsKeyPressed(KEY_ONE + i)) continue;
         if (waveActive) {
-            ShowMessage("So da para plantar quando a onda acabar");
+            ShowMessage("Só dá para plantar quando a onda acabar");
         } else if (!unlocked[i]) {
             ShowMessage(TextFormat("%s bloqueada - compre na Loja [L]", TOWER_INFO[i].name));
         } else {
@@ -788,6 +788,84 @@ static unsigned int Hash2(int a, int b)
     return h;
 }
 
+/* ---------- Fontes ----------
+   Usa a Fredoka (fonts/Fredoka.ttf, licenca SIL Open Font License), arredondada
+   e divertida, combinando com o tema de jardim. Ordem de tentativa:
+     1. fonts/Fredoka.ttf (na pasta atual ou na pasta do .exe)
+     2. Segoe UI do Windows
+     3. fonte padrao do raylib (se nenhuma das anteriores existir) */
+#define FONTE_ARQUIVO     "fonts/Fredoka.ttf"
+#define FONTE_BASE        64    /* tamanho em que a fonte e gerada (reduzida com mipmaps) */
+#define FONTE_TITULO_MIN  24    /* a partir deste tamanho usa a versao em negrito */
+
+static Font fonteTexto, fonteTitulo;
+static bool fontesCarregadas = false;
+
+static Font CarregarFonte(const char *arquivo)
+{
+    int codepoints[224];                       /* ASCII + Latin-1 (acentos do portugues) */
+    for (int i = 0; i < 224; i++) codepoints[i] = 32 + i;
+    Font f = LoadFontEx(arquivo, FONTE_BASE, codepoints, 224);
+    GenTextureMipmaps(&f.texture);             /* texto pequeno fica nitido, sem serrilhado */
+    SetTextureFilter(f.texture, TEXTURE_FILTER_TRILINEAR);
+    return f;
+}
+
+static void CarregarFontes(void)
+{
+    /* 1. Fredoka, que vem junto com o projeto */
+    const char *fredoka[2] = { FONTE_ARQUIVO, TextFormat("%s%s", GetApplicationDirectory(), FONTE_ARQUIVO) };
+    for (int i = 0; i < 2; i++) {
+        if (!FileExists(fredoka[i])) continue;
+        fonteTexto  = CarregarFonte(fredoka[i]);
+        fonteTitulo = CarregarFonte(fredoka[i]);
+        fontesCarregadas = IsFontValid(fonteTexto) && IsFontValid(fonteTitulo);
+        if (fontesCarregadas) return;
+    }
+
+    /* 2. Segoe UI do Windows */
+    const char *texto  = "C:/Windows/Fonts/seguisb.ttf";   /* Segoe UI Semibold */
+    const char *titulo = "C:/Windows/Fonts/segoeuib.ttf";  /* Segoe UI Bold */
+    if (!FileExists(texto) || !FileExists(titulo)) return;
+    fonteTexto  = CarregarFonte(texto);
+    fonteTitulo = CarregarFonte(titulo);
+    fontesCarregadas = IsFontValid(fonteTexto) && IsFontValid(fonteTitulo);
+}
+
+static void DescarregarFontes(void)
+{
+    if (!fontesCarregadas) return;
+    UnloadFont(fonteTexto);
+    UnloadFont(fonteTitulo);
+    fontesCarregadas = false;
+}
+
+static Font FonteDoTamanho(int fs) { return fs >= FONTE_TITULO_MIN ? fonteTitulo : fonteTexto; }
+static float EspacoDoTamanho(int fs) { return fs * 0.03f; }
+/* Fontes TTF tem letras mais baixas que a fonte padrao: texto pequeno ganha 10% */
+static float TamanhoReal(int fs) { return fs < FONTE_TITULO_MIN ? fs * 1.1f : (float)fs; }
+
+/* O raylib so le o peso mais fino da Fredoka (arquivo de peso variavel).
+   Para ela ficar mais "gordinha", o texto e desenhado algumas vezes com um
+   deslocamento minimo para o lado (negrito simulado): mais forte nos titulos. */
+static float NegritoDoTamanho(int fs) { return fs >= FONTE_TITULO_MIN ? fs * 0.05f : fs * 0.045f; }
+
+/* Substitutos de DrawText/MeasureText com os mesmos parametros */
+static void DesenharTexto(const char *t, int x, int y, int fs, Color c)
+{
+    if (!fontesCarregadas) { DrawText(t, x, y, fs, c); return; }
+    float off = NegritoDoTamanho(fs);
+    int passes = (int)ceilf(off);
+    for (int i = 0; i <= passes; i++)
+        DrawTextEx(FonteDoTamanho(fs), t, (Vector2){ x + off * i / passes, (float)y }, TamanhoReal(fs), EspacoDoTamanho(fs), c);
+}
+
+static int MedirTexto(const char *t, int fs)
+{
+    if (!fontesCarregadas) return MeasureText(t, fs);
+    return (int)(MeasureTextEx(FonteDoTamanho(fs), t, TamanhoReal(fs), EspacoDoTamanho(fs)).x + NegritoDoTamanho(fs));
+}
+
 static void DrawPanel(Rectangle r, Color fill, Color border)
 {
     DrawRectangleRounded((Rectangle){ r.x + 3, r.y + 5, r.width, r.height }, 0.08f, 8, Fade(BLACK, 0.35f));
@@ -797,13 +875,13 @@ static void DrawPanel(Rectangle r, Color fill, Color border)
 
 static void DrawTextShadow(const char *t, int x, int y, int fs, Color c)
 {
-    DrawText(t, x + 2, y + 2, fs, Fade(BLACK, 0.5f * c.a / 255.0f));
-    DrawText(t, x, y, fs, c);
+    DesenharTexto(t, x + 2, y + 2, fs, Fade(BLACK, 0.5f * c.a / 255.0f));
+    DesenharTexto(t, x, y, fs, c);
 }
 
 static void DrawCentered(const char *text, int y, int fs, Color col)
 {
-    DrawTextShadow(text, SCREEN_W / 2 - MeasureText(text, fs) / 2, y, fs, col);
+    DrawTextShadow(text, SCREEN_W / 2 - MedirTexto(text, fs) / 2, y, fs, col);
 }
 
 /* ---------- Icones ---------- */
@@ -844,10 +922,10 @@ static void DrawLockIcon(Vector2 p, float s, Color c)
 /* "Tecla" desenhada como uma pecinha; devolve a largura */
 static int DrawKeyChip(const char *key, int x, int y)
 {
-    int w = MeasureText(key, 14) + 14;
+    int w = MedirTexto(key, 14) + 14;
     DrawRectangleRounded((Rectangle){ (float)x, (float)y, (float)w, 22 }, 0.35f, 6, (Color){ 58, 66, 60, 255 });
     DrawRectangleRounded((Rectangle){ (float)x, (float)y, (float)w, 19 }, 0.35f, 6, (Color){ 96, 110, 98, 255 });
-    DrawText(key, x + 7, y + 3, 14, UI_TEXT);
+    DesenharTexto(key, x + 7, y + 3, 14, UI_TEXT);
     return w;
 }
 
@@ -873,10 +951,10 @@ static bool DrawButton(Rectangle rec, const char *line1, const char *line2, bool
     int fs = 16;
     if (line1 && line1[0]) {
         if (line2) {
-            DrawText(line1, (int)(r.x + (r.width - MeasureText(line1, fs)) / 2), (int)(r.y + r.height / 2 - fs - 2), fs, fg);
-            DrawText(line2, (int)(r.x + (r.width - MeasureText(line2, fs)) / 2), (int)(r.y + r.height / 2 + 2), fs, enabled ? UI_ACCENT : fg);
+            DesenharTexto(line1, (int)(r.x + (r.width - MedirTexto(line1, fs)) / 2), (int)(r.y + r.height / 2 - fs - 2), fs, fg);
+            DesenharTexto(line2, (int)(r.x + (r.width - MedirTexto(line2, fs)) / 2), (int)(r.y + r.height / 2 + 2), fs, enabled ? UI_ACCENT : fg);
         } else {
-            DrawText(line1, (int)(r.x + (r.width - MeasureText(line1, fs)) / 2), (int)(r.y + (r.height - fs) / 2), fs, fg);
+            DesenharTexto(line1, (int)(r.x + (r.width - MedirTexto(line1, fs)) / 2), (int)(r.y + (r.height - fs) / 2), fs, fg);
         }
     }
     return enabled && hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
@@ -952,11 +1030,11 @@ static void DrawRock(int c, int r)
 
 static void DrawSign(Vector2 center, const char *text, Color board)
 {
-    int w = MeasureText(text, 10) + 10;
+    int w = MedirTexto(text, 10) + 10;
     Rectangle r = { center.x - w / 2.0f, center.y - 7, (float)w, 14 };
     DrawRectangleRounded(r, 0.3f, 4, board);
     DrawRectangleRoundedLinesEx(r, 0.3f, 4, 1, Fade(BLACK, 0.4f));
-    DrawText(text, (int)r.x + 5, (int)r.y + 2, 10, RAYWHITE);
+    DesenharTexto(text, (int)r.x + 5, (int)r.y + 2, 10, RAYWHITE);
 }
 
 /* Toca de onde saem as pragas */
@@ -1042,7 +1120,7 @@ static void DrawMap(void)
         for (int rr = 0; rr < ROWS; rr++)
             for (int cc = 0; cc < COLS; cc++)
                 if (dist[rr][cc] < INF)
-                    DrawText(TextFormat("%d", dist[rr][cc]), cc * TILE + 4, rr * TILE + 4, 10, Fade(BLACK, 0.7f));
+                    DesenharTexto(TextFormat("%d", dist[rr][cc]), cc * TILE + 4, rr * TILE + 4, 10, Fade(BLACK, 0.7f));
     }
 }
 
@@ -1296,7 +1374,7 @@ static void DrawProjectiles(void)
 
     for (int i = 0; i < MAX_FLOAT; i++)
         if (floats[i].active) {
-            int w = MeasureText(floats[i].text, 16);
+            int w = MedirTexto(floats[i].text, 16);
             DrawTextShadow(floats[i].text, (int)floats[i].pos.x - w / 2, (int)floats[i].pos.y - 20, 16, Fade(floats[i].color, floats[i].life));
         }
 }
@@ -1306,19 +1384,19 @@ static void DrawToast(int y)
 {
     if (msgTimer <= 0) return;
     float a = msgTimer < 0.3f ? msgTimer / 0.3f : 1.0f;
-    int fs = 20, w = MeasureText(msgText, fs);
+    int fs = 20, w = MedirTexto(msgText, fs);
     Rectangle r = { SCREEN_W / 2.0f - w / 2.0f - 16, (float)y, w + 32.0f, fs + 16.0f };
     DrawRectangleRounded((Rectangle){ r.x + 2, r.y + 4, r.width, r.height }, 0.45f, 8, Fade(BLACK, 0.35f * a));
     DrawRectangleRounded(r, 0.45f, 8, Fade((Color){ 25, 32, 27, 255 }, 0.94f * a));
     DrawRectangleRoundedLinesEx(r, 0.45f, 8, 2, Fade(UI_ACCENT, a));
-    DrawText(msgText, (int)r.x + 16, (int)r.y + 8, fs, Fade(UI_TEXT, a));
+    DesenharTexto(msgText, (int)r.x + 16, (int)r.y + 8, fs, Fade(UI_TEXT, a));
 }
 
 static void DrawSpecialLine(const TowerInfo *ti, float poisonScale, int x, int y, int fs)
 {
-    if (ti->splash > 0)    DrawText(TextFormat("Dano em area: %.0f px", ti->splash), x, y, fs, ORANGE);
-    if (ti->slow > 0)      DrawText(TextFormat("Deixa lento: -%.0f%% velocidade", ti->slow * 100), x, y, fs, SKYBLUE);
-    if (ti->poisonDps > 0) DrawText(TextFormat("Veneno: %.0f + %.0f%% da vida/s", ti->poisonDps * poisonScale, ti->poisonPct * 100 * poisonScale), x, y, fs, LIME);
+    if (ti->splash > 0)    DesenharTexto(TextFormat("Dano em área: %.0f px", ti->splash), x, y, fs, ORANGE);
+    if (ti->slow > 0)      DesenharTexto(TextFormat("Deixa lento: -%.0f%% velocidade", ti->slow * 100), x, y, fs, SKYBLUE);
+    if (ti->poisonDps > 0) DesenharTexto(TextFormat("Veneno: %.0f + %.0f%% da vida/s", ti->poisonDps * poisonScale, ti->poisonPct * 100 * poisonScale), x, y, fs, LIME);
 }
 
 /* Cartao com os dados da planta selecionada, ao lado dela no mapa */
@@ -1336,18 +1414,18 @@ static void DrawSelectionCard(void)
     Rectangle card = { x, y, w, h };
     DrawPanel(card, Fade((Color){ 28, 38, 30, 255 }, 0.95f), ti->color);
     DrawPlant(t->kind, (Vector2){ x + 22, y + 24 }, 0.7f, 0, false);
-    DrawText(ti->name, (int)x + 44, (int)y + 10, 20, UI_TEXT);
-    DrawText(TextFormat("Nivel %d/%d", t->level, MAX_LEVEL), (int)x + 44, (int)y + 32, 12, UI_MUTED);
+    DesenharTexto(ti->name, (int)x + 44, (int)y + 10, 20, UI_TEXT);
+    DesenharTexto(TextFormat("Nível %d/%d", t->level, MAX_LEVEL), (int)x + 44, (int)y + 32, 12, UI_MUTED);
     DrawLevelPips(x + 124, y + 38, t->level);
 
     float scale = 1.0f + UPG_DAMAGE * (t->level - 1);
-    DrawText(TextFormat("Dano %.0f   Alcance %.0f", TowerDamage(t), TowerRange(t)), (int)x + 10, (int)y + 54, 12, UI_TEXT);
-    DrawText(TextFormat("Tiros/s %.1f", TowerFireRate(t)), (int)x + 10, (int)y + 70, 12, UI_TEXT);
+    DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f", TowerDamage(t), TowerRange(t)), (int)x + 10, (int)y + 54, 12, UI_TEXT);
+    DesenharTexto(TextFormat("Tiros/s %.1f", TowerFireRate(t)), (int)x + 10, (int)y + 70, 12, UI_TEXT);
     DrawSpecialLine(ti, scale, (int)x + 10, (int)y + 86, 12);
-    const char *next = t->level >= MAX_LEVEL ? "Nivel maximo"
+    const char *next = t->level >= MAX_LEVEL ? "Nível máximo"
                      : !upgradesUnlocked ? TextFormat("Melhorias na onda %d", UPGRADE_UNLOCK_WAVE)
-                     : TextFormat("Proximo nivel: $%d", UpgradeCost(t));
-    DrawText(next, (int)x + 10, (int)y + 100, 12, UI_ACCENT);
+                     : TextFormat("Próximo nível: $%d", UpgradeCost(t));
+    DesenharTexto(next, (int)x + 10, (int)y + 100, 12, UI_ACCENT);
 }
 
 /* Dica ao passar o mouse sobre um botao de planta */
@@ -1361,12 +1439,12 @@ static void DrawPlantTooltip(int i, float bx, int y0)
     Rectangle tip = { x, y0 - h - 8.0f, w, h };
     DrawPanel(tip, Fade((Color){ 28, 38, 30, 255 }, 0.96f), ti->color);
     DrawPlant((TowerKind)i, (Vector2){ x + 24, tip.y + 26 }, 0.75f, 0, !unlocked[i]);
-    DrawText(ti->name, (int)x + 48, (int)tip.y + 10, 20, UI_TEXT);
+    DesenharTexto(ti->name, (int)x + 48, (int)tip.y + 10, 20, UI_TEXT);
     DrawCoin((Vector2){ x + 56, tip.y + 41 }, 6);
-    DrawText(TextFormat("%d", ti->cost), (int)x + 66, (int)tip.y + 35, 14, UI_ACCENT);
-    DrawText(ti->desc, (int)x + 10, (int)tip.y + 56, 12, UI_MUTED);
-    DrawText(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), (int)x + 10, (int)tip.y + 74, 12, UI_TEXT);
-    if (!unlocked[i]) DrawText(TextFormat("Bloqueada: %d sementes na loja [L]", ti->seedPrice), (int)x + 10, (int)tip.y + 92, 12, (Color){ 240, 140, 120, 255 });
+    DesenharTexto(TextFormat("%d", ti->cost), (int)x + 66, (int)tip.y + 35, 14, UI_ACCENT);
+    DesenharTexto(ti->desc, (int)x + 10, (int)tip.y + 56, 12, UI_MUTED);
+    DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), (int)x + 10, (int)tip.y + 74, 12, UI_TEXT);
+    if (!unlocked[i]) DesenharTexto(TextFormat("Bloqueada: %d sementes na loja [L]", ti->seedPrice), (int)x + 10, (int)tip.y + 92, 12, (Color){ 240, 140, 120, 255 });
     else              DrawSpecialLine(ti, 1.0f, (int)x + 10, (int)tip.y + 92, 12);
 }
 
@@ -1415,23 +1493,23 @@ static void DrawUI(void)
         if (CheckCollisionPointRec(mouse, rec)) hovered = i;
 
         Color txt = (unlocked[i] && !waveActive) ? UI_TEXT : UI_MUTED;
-        DrawText(TextFormat("%d", i + 1), (int)rec.x + 7, (int)rec.y + 6, 12, UI_MUTED);
+        DesenharTexto(TextFormat("%d", i + 1), (int)rec.x + 7, (int)rec.y + 6, 12, UI_MUTED);
         Vector2 icon = { rec.x + rec.width / 2, rec.y + 32 };
         DrawPlant((TowerKind)i, icon, 0.68f, 0, !unlocked[i]);
         const char *name = TOWER_INFO[i].name;
-        DrawText(name, (int)(rec.x + (rec.width - MeasureText(name, 14)) / 2), (int)rec.y + 60, 14, txt);
+        DesenharTexto(name, (int)(rec.x + (rec.width - MedirTexto(name, 14)) / 2), (int)rec.y + 60, 14, txt);
 
         if (!unlocked[i]) {
             DrawLockIcon(icon, 1.1f, UI_TEXT);
             const char *l = "Loja";
-            if (!waveActive) DrawText(l, (int)(rec.x + (rec.width - MeasureText(l, 14)) / 2), (int)rec.y + 80, 14, (Color){ 240, 150, 120, 255 });
+            if (!waveActive) DesenharTexto(l, (int)(rec.x + (rec.width - MedirTexto(l, 14)) / 2), (int)rec.y + 80, 14, (Color){ 240, 150, 120, 255 });
             if (live && CheckCollisionPointRec(mouse, rec) && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) OpenShop();
         } else if (!waveActive) {
             const char *price = TextFormat("%d", TOWER_INFO[i].cost);
-            int pw = MeasureText(price, 14), total = 16 + pw;
+            int pw = MedirTexto(price, 14), total = 16 + pw;
             float px = rec.x + (rec.width - total) / 2;
             DrawCoin((Vector2){ px + 6, rec.y + 87 }, 6);
-            DrawText(price, (int)px + 16, (int)rec.y + 80, 14, money >= TOWER_INFO[i].cost ? UI_ACCENT : (Color){ 230, 110, 100, 255 });
+            DesenharTexto(price, (int)px + 16, (int)rec.y + 80, 14, money >= TOWER_INFO[i].cost ? UI_ACCENT : (Color){ 230, 110, 100, 255 });
         }
     }
 
@@ -1440,13 +1518,13 @@ static void DrawUI(void)
         Rectangle b = { 172, y0 + 84.0f, 488, 24 };
         DrawRectangleRounded(b, 0.5f, 8, Fade((Color){ 20, 24, 20, 255 }, 0.92f));
         DrawRectangleRoundedLinesEx(b, 0.5f, 8, 1.5f, ORANGE);
-        DrawText(aviso, (int)(b.x + (b.width - MeasureText(aviso, 16)) / 2), (int)b.y + 4, 16, ORANGE);
+        DesenharTexto(aviso, (int)(b.x + (b.width - MedirTexto(aviso, 16)) / 2), (int)b.y + 4, 16, ORANGE);
     }
 
     /* Acoes */
     float rx = 676;
     if (DrawButton((Rectangle){ rx, y0 + 8.0f, 135, 34 },
-                   waveActive ? "Onda em curso" : "Onda [Espaco]", NULL, live && !waveActive, !waveActive && live))
+                   waveActive ? "Onda em curso" : "Onda [Espaço]", NULL, live && !waveActive, !waveActive && live))
         StartWave();
     if (DrawButton((Rectangle){ rx + 145, y0 + 8.0f, 135, 34 },
                    TextFormat("Velocidade %dx [F]", gameSpeed), NULL, live, gameSpeed == 2))
@@ -1455,7 +1533,7 @@ static void DrawUI(void)
     if (selC >= 0) {
         Tower *t = &towers[selR][selC];
         const char *up = !upgradesUnlocked ? TextFormat("Melhorar: onda %d", UPGRADE_UNLOCK_WAVE)
-                       : (t->level >= MAX_LEVEL) ? "Nivel maximo"
+                       : (t->level >= MAX_LEVEL) ? "Nível máximo"
                        : TextFormat("Melhorar $%d [U]", UpgradeCost(t));
         if (DrawButton((Rectangle){ rx, y0 + 46.0f, 135, 34 }, up, NULL,
                        live && upgradesUnlocked && t->level < MAX_LEVEL && money >= UpgradeCost(t), false))
@@ -1466,8 +1544,8 @@ static void DrawUI(void)
     } else {
         Rectangle hint = { rx, y0 + 46.0f, 280, 34 };
         DrawRectangleRounded(hint, 0.3f, 8, (Color){ 32, 42, 34, 255 });
-        DrawText("Clique numa planta para", (int)rx + 10, y0 + 50, 13, UI_MUTED);
-        DrawText(upgradesUnlocked ? "ver detalhes, melhorar ou vender" : "ver detalhes ou vender",
+        DesenharTexto("Clique numa planta para", (int)rx + 10, y0 + 50, 13, UI_MUTED);
+        DesenharTexto(upgradesUnlocked ? "ver detalhes, melhorar ou vender" : "ver detalhes ou vender",
                  (int)rx + 10, y0 + 64, 13, UI_MUTED);
     }
 
@@ -1482,10 +1560,10 @@ static void DrawShop(void)
 {
     DrawCentered("LOJA DE PLANTAS", 26, 44, UI_ACCENT);
     const char *sv = TextFormat("%d sementes", seeds);
-    int sw = MeasureText(sv, 24);
+    int sw = MedirTexto(sv, 24);
     DrawSeedIcon((Vector2){ SCREEN_W / 2.0f - sw / 2.0f - 16, 92 }, 11);
     DrawTextShadow(sv, SCREEN_W / 2 - sw / 2 + 4, 80, 24, (Color){ 232, 200, 150, 255 });
-    DrawCentered(TextFormat("Ganhe sementes: +%d por onda, +%d extra em onda de chefe, +%d por tanque destruido",
+    DrawCentered(TextFormat("Ganhe sementes: +%d por onda, +%d extra em onda de chefe, +%d por tanque destruído",
                             SEEDS_PER_WAVE, SEEDS_BOSS_WAVE, SEEDS_PER_TANK), 116, 16, UI_MUTED);
 
     for (int i = 0; i < TOWER_COUNT; i++) {
@@ -1498,18 +1576,18 @@ static void DrawShop(void)
         DrawCircle(x + 34, y + 34, 26, Fade(BLACK, 0.2f));
         DrawPlant((TowerKind)i, (Vector2){ x + 34.0f, y + 34.0f }, 1.1f, (float)GetTime() * 0.6f, false);
         DrawTextShadow(ti->name, x + 70, y + 16, 22, UI_TEXT);
-        DrawText(TextFormat("Tecla %d", i + 1), x + 70, y + 42, 12, UI_MUTED);
-        DrawText(ti->desc, x + 14, y + 70, 13, UI_MUTED);
+        DesenharTexto(TextFormat("Tecla %d", i + 1), x + 70, y + 42, 12, UI_MUTED);
+        DesenharTexto(ti->desc, x + 14, y + 70, 13, UI_MUTED);
         DrawCoin((Vector2){ x + 20, y + 98.0f }, 6);
-        DrawText(TextFormat("Plantar: $%d", ti->cost), x + 32, y + 92, 14, UI_ACCENT);
-        DrawText(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), x + 14, y + 114, 13, UI_TEXT);
+        DesenharTexto(TextFormat("Plantar: $%d", ti->cost), x + 32, y + 92, 14, UI_ACCENT);
+        DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), x + 14, y + 114, 13, UI_TEXT);
         DrawSpecialLine(ti, 1.0f, x + 14, y + 134, 13);
 
         Rectangle btn = { card.x + 14, card.y + 164, 252, 34 };
         if (unlocked[i]) {
             DrawRectangleRounded(btn, 0.3f, 8, (Color){ 34, 78, 40, 255 });
             const char *ok = "LIBERADA";
-            DrawText(ok, (int)(btn.x + (btn.width - MeasureText(ok, 18)) / 2), (int)btn.y + 8, 18, (Color){ 140, 230, 110, 255 });
+            DesenharTexto(ok, (int)(btn.x + (btn.width - MedirTexto(ok, 18)) / 2), (int)btn.y + 8, 18, (Color){ 140, 230, 110, 255 });
         } else if (DrawButton(btn, TextFormat("Comprar - %d sementes", ti->seedPrice), NULL, seeds >= ti->seedPrice, seeds >= ti->seedPrice)) {
             BuyTower(i);
         }
@@ -1536,28 +1614,35 @@ static void DrawUpgradeTutorial(void)
         DrawCircleLinesV(p, ranges[lv], Fade(WHITE, 0.5f));
         DrawPlant(TOWER_BASIC, p, 1.2f + 0.15f * lv, -0.3f, false);
         DrawLevelPips(p.x - 9, p.y + 34, lv + 1);
-        const char *lbl = TextFormat("Nivel %d", lv + 1);
-        DrawText(lbl, (int)p.x - MeasureText(lbl, 18) / 2, 300, 18, UI_TEXT);
-        if (lv < 2) DrawText(">", (int)(xs[lv] + 82), 212, 30, UI_ACCENT);
+        const char *lbl = TextFormat("Nível %d", lv + 1);
+        DesenharTexto(lbl, (int)p.x - MedirTexto(lbl, 18) / 2, 300, 18, UI_TEXT);
+        if (lv < 2) DesenharTexto(">", (int)(xs[lv] + 82), 212, 30, UI_ACCENT);
     }
 
     const TowerInfo *ex = &TOWER_INFO[TOWER_BASIC];
+    /* Copia os textos formatados: o TextFormat reaproveita a mesma memoria a cada chamada */
+    char passo3[96], passo4[96];
+    snprintf(passo3, sizeof(passo3), "Cada nível: +%.0f%% de dano, +%.0f%% de alcance e +%.0f%% de tiros/s.",
+             UPG_DAMAGE * 100, UPG_RANGE * 100, UPG_FIRERATE * 100);
+    snprintf(passo4, sizeof(passo4), "Custo: nível 2 = preço da planta, nível 3 = 2x (%s: $%d e $%d).",
+             ex->name, ex->cost, ex->cost * 2);
     const char *steps[] = {
-        "Clique em uma planta que ja esta no mapa para seleciona-la.",
-        "Clique em \"Melhorar\" (ou aperte U) para subir de nivel.",
-        TextFormat("Cada nivel: +%.0f%% de dano, +%.0f%% de alcance e +%.0f%% de tiros/s.",
-                   UPG_DAMAGE * 100, UPG_RANGE * 100, UPG_FIRERATE * 100),
-        TextFormat("Custo: nivel 2 = preco da planta, nivel 3 = 2x (%s: $%d e $%d).", ex->name, ex->cost, ex->cost * 2),
-        "O nivel maximo e 3 - as bolinhas douradas mostram o nivel.",
+        "Clique em uma planta que já está no mapa para selecioná-la.",
+        "Clique em \"Melhorar\" (ou aperte U) para subir de nível.",
+        passo3,
+        passo4,
+        "O nível máximo é 3 - as bolinhas douradas mostram o nível.",
     };
     for (int i = 0; i < 5; i++) {
         int y = 338 + i * 32;
+        char num[4];
+        snprintf(num, sizeof(num), "%d", i + 1);
         DrawCircle(160, y + 9, 11, UI_BORDER);
-        DrawText(TextFormat("%d", i + 1), 156, y + 2, 16, UI_TEXT);
-        DrawText(steps[i], 182, y, 18, UI_TEXT);
+        DesenharTexto(num, 156, y + 2, 16, UI_TEXT);
+        DesenharTexto(steps[i], 182, y, 18, UI_TEXT);
     }
-    DrawText("Dica: vender (S) devolve 70% de tudo o que voce gastou na planta,", 150, 510, 16, (Color){ 232, 200, 150, 255 });
-    DrawText("incluindo as melhorias.", 150, 530, 16, (Color){ 232, 200, 150, 255 });
+    DesenharTexto("Dica: vender (S) devolve 70% de tudo o que você gastou na planta,", 150, 510, 16, (Color){ 232, 200, 150, 255 });
+    DesenharTexto("incluindo as melhorias.", 150, 530, 16, (Color){ 232, 200, 150, 255 });
 
     if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 578, 220, 44 }, "Entendi! [ENTER]", NULL, true, true))
         state = STATE_PLAYING;
@@ -1572,32 +1657,32 @@ static void DrawMenu(void)
     DrawCentered("TOWER DEFENSE", 80, 52, UI_ACCENT);
     DrawCentered(TextFormat("Defenda o jardim das pragas por %d ondas", MAX_WAVES), 142, 20, UI_TEXT);
 
-    DrawText("CONTROLES", 200, 186, 16, UI_MUTED);
+    DesenharTexto("CONTROLES", 200, 186, 16, UI_MUTED);
     struct { const char *k; const char *d; } rows[] = {
         { "1 - 6",    "Escolher planta" },     { "Clique",     "Plantar / selecionar" },
         { "U",        "Melhorar" },            { "S",          "Vender" },
-        { "Espaco",   "Proxima onda" },        { "L",          "Loja de plantas" },
+        { "Espaço",   "Próxima onda" },        { "L",          "Loja de plantas" },
         { "F",        "Velocidade 1x / 2x" },  { "P / Esc",    "Pausar" },
-        { "D",        "Mapa da BFS" },         { "Botao dir.", "Cancelar" },
+        { "D",        "Mapa da BFS" },         { "Botão dir.", "Cancelar" },
     };
     rows[2].d = TextFormat("Melhorar (onda %d+)", UPGRADE_UNLOCK_WAVE);
     for (int i = 0; i < 10; i++) {
         int x = 200 + (i % 2) * 290, y = 210 + (i / 2) * 30;
         DrawKeyChip(rows[i].k, x, y);
-        DrawText(rows[i].d, x + 104, y + 3, 16, UI_TEXT);
+        DesenharTexto(rows[i].d, x + 104, y + 3, 16, UI_TEXT);
     }
 
-    DrawText("DICAS", 200, 370, 16, UI_MUTED);
+    DesenharTexto("DICAS", 200, 370, 16, UI_MUTED);
     const char *tips[] = {
         "As pragas seguem a estrada - plante na grama, perto das curvas.",
-        "So da para plantar quando a onda acaba.",
+        "Só dá para plantar quando a onda acaba.",
         TextFormat("Na onda %d abre uma segunda entrada!", SECOND_ENTRANCE_WAVE),
         "Ganhe sementes e libere novas plantas na loja (o progresso fica salvo).",
     };
     for (int i = 0; i < 4; i++) {
         int y = 396 + i * 28;
         DrawCircle(208, y + 8, 4, (Color){ 120, 200, 90, 255 });
-        DrawText(tips[i], 222, y, 16, UI_TEXT);
+        DesenharTexto(tips[i], 222, y, 16, UI_TEXT);
     }
 
     if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 230, 534, 220, 52 }, "Jogar [ENTER]", NULL, true, true))
@@ -1614,8 +1699,8 @@ static void DrawEndScreen(bool victory)
     if (victory) {
         DrawPlant(TOWER_LASER, (Vector2){ pnl.x + 60, pnl.y + 60 }, 1.5f, (float)GetTime(), false);
         DrawPlant(TOWER_LASER, (Vector2){ pnl.x + pnl.width - 60, pnl.y + 60 }, 1.5f, -(float)GetTime(), false);
-        DrawCentered("VITORIA!", (int)pnl.y + 30, 52, UI_ACCENT);
-        DrawCentered("O jardim esta a salvo!", (int)pnl.y + 92, 20, UI_TEXT);
+        DrawCentered("VITÓRIA!", (int)pnl.y + 30, 52, UI_ACCENT);
+        DrawCentered("O jardim está a salvo!", (int)pnl.y + 92, 20, UI_TEXT);
     } else {
         DrawCentered("FIM DE JOGO", (int)pnl.y + 30, 52, (Color){ 240, 90, 80, 255 });
         DrawCentered("As pragas chegaram na casinha...", (int)pnl.y + 92, 20, UI_TEXT);
@@ -1623,11 +1708,11 @@ static void DrawEndScreen(bool victory)
 
     int y = (int)pnl.y + 140;
     DrawFlagIcon((Vector2){ pnl.x + 150, y + 10.0f }, 9);
-    DrawText(TextFormat("Onda alcancada: %d/%d", wave, MAX_WAVES), (int)pnl.x + 170, y, 20, UI_TEXT);
+    DesenharTexto(TextFormat("Onda alcançada: %d/%d", wave, MAX_WAVES), (int)pnl.x + 170, y, 20, UI_TEXT);
     DrawHeart((Vector2){ pnl.x + 150, y + 42.0f }, 9, (Color){ 232, 70, 70, 255 });
-    DrawText(TextFormat("Vidas restantes: %d", lives), (int)pnl.x + 170, y + 32, 20, UI_TEXT);
+    DesenharTexto(TextFormat("Vidas restantes: %d", lives), (int)pnl.x + 170, y + 32, 20, UI_TEXT);
     DrawSeedIcon((Vector2){ pnl.x + 150, y + 74.0f }, 9);
-    DrawText(TextFormat("Sementes guardadas: %d", seeds), (int)pnl.x + 170, y + 64, 20, UI_TEXT);
+    DesenharTexto(TextFormat("Sementes guardadas: %d", seeds), (int)pnl.x + 170, y + 64, 20, UI_TEXT);
 
     if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 130, pnl.y + 260, 260, 50 }, "Jogar de novo [ENTER]", NULL, true, true)) {
         ResetGame();
@@ -1649,7 +1734,7 @@ static void DrawOverlay(void)
             DrawCentered("PAUSADO", 256, 48, UI_TEXT);
             if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 330, 220, 46 }, "Continuar [P]", NULL, true, true))
                 state = STATE_PLAYING;
-            DrawCentered("Esc tambem continua", 396, 14, UI_MUTED);
+            DrawCentered("Esc também continua", 396, 14, UI_MUTED);
         } break;
         case STATE_GAMEOVER: DrawEndScreen(false); break;
         case STATE_VICTORY:  DrawEndScreen(true); break;
@@ -1665,6 +1750,7 @@ int main(void)
     InitWindow(SCREEN_W, SCREEN_H, "Tower Defense - raylib");
     SetExitKey(KEY_NULL);   /* ESC pausa em vez de fechar */
     SetTargetFPS(60);
+    CarregarFontes();
     LoadProgress();
     ResetGame();
 
@@ -1716,6 +1802,7 @@ int main(void)
         EndDrawing();
     }
 
+    DescarregarFontes();
     CloseWindow();
     return 0;
 }
