@@ -63,13 +63,13 @@
 #endif
 #define INF         9999
 
-#define START_MONEY 150
+/* O dinheiro inicial agora e definido em cada fase (LEVELS[].startMoney) */
 #define START_LIVES 20
 
 /* Dificuldade: vida base dos inimigos e quanto ela cresce a cada onda (1.22 = +22%) */
 #define ENEMY_BASE_HP 18.0f
 #ifndef HP_GROWTH
-#define HP_GROWTH     1.20f
+#define HP_GROWTH     1.205f
 #endif
 
 #define SAVE_FILE   "progresso.txt"
@@ -79,32 +79,99 @@
 #define SEEDS_BOSS_WAVE  3   /* bonus extra em ondas de chefe (5, 10, 15, 20) */
 #define SEEDS_PER_TANK   2
 
+/* ------------------------------------------------------------------ */
+/* Fases                                                              */
+/* ------------------------------------------------------------------ */
 /* Mapa: '.' grama (pode construir)  '=' estrada  '#' pedra
          'S' entrada dos inimigos  'B' base
          'T' segunda entrada  '+' estrada da segunda entrada
-         (fechada ate a onda SECOND_ENTRANCE_WAVE, mas ja nao aceita plantas) */
-static const char *MAP[ROWS] = {
-    "..........#.........",
-    "....................",
-    "S====....======.....",
-    "....=....=....=.....",
-    "....=....=....=..#..",
-    "....=.#..=....=.....",
-    "....=....=....=.....",
-    ".#..=....=....=.....",
-    "....======....=.....",
-    "....+.........=====B",
-    "T++++..#............",
-    "...........#........",
-};
+         (fechada ate a onda secondWave da fase, mas ja nao aceita plantas)
+   Cada fase e uma linha desta tabela: para criar uma fase nova basta
+   desenhar outro mapa e escolher os numeros de dificuldade. */
+typedef struct {
+    const char *name;
+    const char *desc;
+    const char *map[ROWS];
+    int   secondWave;     /* onda em que a segunda entrada abre */
+    float hpMult;         /* multiplicador da vida das pragas */
+    int   startMoney;     /* dinheiro no inicio da fase */
+    int   pathLen;        /* passos da entrada ate a casa (so para mostrar) */
+    Color grassA, grassB; /* cores da grama (xadrez) */
+} LevelInfo;
 
-#define SECOND_ENTRANCE_WAVE 10   /* onda em que a segunda entrada abre */
+#define LEVEL_COUNT 3
+
+#ifndef LEVEL1_HP
+#define LEVEL1_HP 1.00f
+#endif
+#ifndef LEVEL2_HP
+#define LEVEL2_HP 1.00f
+#endif
+#ifndef LEVEL3_HP
+#define LEVEL3_HP 0.85f   /* estrada curtissima: pragas um pouco mais fracas para compensar */
+#endif
+
+static const LevelInfo LEVELS[LEVEL_COUNT] = {
+    { .name = "Jardim", .desc = "Estrada longa em zigue-zague",
+      .map = {
+        "..........#.........",
+        "....................",
+        "S====....======.....",
+        "....=....=....=.....",
+        "....=....=....=..#..",
+        "....=.#..=....=.....",
+        "....=....=....=.....",
+        ".#..=....=....=.....",
+        "....======....=.....",
+        "....+.........=====B",
+        "T++++..#............",
+        "...........#........",
+      },
+      .secondWave = 10, .hpMult = LEVEL1_HP, .startMoney = 150, .pathLen = 38,
+      .grassA = { 98, 162, 82, 255 }, .grassB = { 90, 152, 76, 255 } },
+
+    { .name = "Horta", .desc = "Caminho mais curto, 2ª entrada mais cedo",
+      .map = {
+        "...S................",
+        "...=...#............",
+        "...=......=======...",
+        ".#.=......=.....=...",
+        "...=......=..#..=...",
+        "...========.....=...",
+        "..........+.....=.#.",
+        "......#...+.....=...",
+        "..........+.#...=...",
+        "T++++++++++.....=...",
+        "................=..#",
+        ".....#..........B...",
+      },
+      .secondWave = 7, .hpMult = LEVEL2_HP, .startMoney = 160, .pathLen = 30,
+      .grassA = { 132, 162, 74, 255 }, .grassB = { 122, 152, 68, 255 } },
+
+    { .name = "Estufa", .desc = "Duas entradas e estrada curtinha",
+      .map = {
+        "....................",
+        "........#..#........",
+        "S=====........+++++T",
+        ".....=........+.....",
+        ".....=...#....+.....",
+        "..#..=........+..#..",
+        ".....=........+.....",
+        ".....=====+++++.....",
+        "#........=.........#",
+        ".......#.=..#.......",
+        "..#......=.......#..",
+        ".........B..........",
+      },
+      .secondWave = 4, .hpMult = LEVEL3_HP, .startMoney = 180, .pathLen = 18,
+      .grassA = { 80, 152, 108, 255 }, .grassB = { 72, 142, 100, 255 } },
+};
 
 /* ------------------------------------------------------------------ */
 /* Tipos                                                              */
 /* ------------------------------------------------------------------ */
 typedef enum { TILE_EMPTY, TILE_ROCK, TILE_TOWER, TILE_ROAD } TileType;
-typedef enum { STATE_MENU, STATE_PLAYING, STATE_PAUSED, STATE_SHOP, STATE_TUTORIAL, STATE_GAMEOVER, STATE_VICTORY } GameState;
+typedef enum { STATE_MENU, STATE_LEVELS, STATE_PLAYING, STATE_PAUSED, STATE_SHOP, STATE_TUTORIAL, STATE_GAMEOVER, STATE_VICTORY } GameState;
 typedef enum {
     TOWER_BASIC, TOWER_SNIPER,                    /* liberadas desde o inicio */
     TOWER_FROST,                                  /* comprada na loja */
@@ -227,6 +294,12 @@ static bool branchRoad[ROWS][COLS];       /* tiles da estrada da segunda entrada
 static GameState state = STATE_MENU;
 static GameState shopReturn = STATE_MENU;  /* para onde voltar ao fechar a loja */
 
+static int   currentLevel = 0;            /* fase sendo jogada (0 = Jardim) */
+static int   levelsWon = 0;               /* bit i ligado = fase i vencida (salvo em arquivo) */
+#define SECOND_ENTRANCE_WAVE (LEVELS[currentLevel].secondWave)
+
+static bool LevelUnlocked(int i) { return i == 0 || (levelsWon & (1 << (i - 1))); }
+
 /* Progresso permanente (salvo em arquivo) */
 static int   seeds;
 static bool  unlocked[TOWER_COUNT];
@@ -295,6 +368,7 @@ static int   SellValue(const Tower *t)     { return (int)(t->invested * 0.7f); }
 /* Formato do arquivo:
  *   sementes 7
  *   torres 1 1 1 1 0 0
+ *   fases 1          (bit i = fase i vencida: 1 = Jardim, 3 = Jardim e Horta)
  */
 static void SaveProgress(void)
 {
@@ -302,13 +376,14 @@ static void SaveProgress(void)
     if (!f) return;
     fprintf(f, "sementes %d\ntorres", seeds);
     for (int i = 0; i < TOWER_COUNT; i++) fprintf(f, " %d", unlocked[i] ? 1 : 0);
-    fprintf(f, "\n");
+    fprintf(f, "\nfases %d\n", levelsWon);
     fclose(f);
 }
 
 static void LoadProgress(void)
 {
     seeds = 0;
+    levelsWon = 0;
     for (int i = 0; i < TOWER_COUNT; i++) unlocked[i] = (TOWER_INFO[i].seedPrice == 0);
 
     FILE *f = fopen(SAVE_FILE, "r");
@@ -322,6 +397,8 @@ static void LoadProgress(void)
             if (v) unlocked[i] = true;
         }
     }
+    int fw;
+    if (fscanf(f, " fases %d", &fw) == 1 && fw >= 0) levelsWon = fw;   /* arquivos antigos nao tem esta linha */
     fclose(f);
 }
 
@@ -352,9 +429,11 @@ static void OpenShop(void)
 /* ------------------------------------------------------------------ */
 static void LoadMap(void)
 {
+    const char *const *map = LEVELS[currentLevel].map;
+    spawn2C = spawn2R = -1;
     for (int r = 0; r < ROWS; r++) {
         for (int c = 0; c < COLS; c++) {
-            char ch = (c < (int)strlen(MAP[r])) ? MAP[r][c] : '.';
+            char ch = (c < (int)strlen(map[r])) ? map[r][c] : '.';
             grid[r][c] = TILE_EMPTY;
             branchRoad[r][c] = false;
             if (ch == '#') grid[r][c] = TILE_ROCK;
@@ -423,7 +502,7 @@ static void ResetGame(void)
     baseFlash = 0;
     ComputeDistances(dist);
 
-    money = START_MONEY;
+    money = LEVELS[currentLevel].startMoney;
     lives = START_LIVES;
     wave = 0;
     waveActive = false;
@@ -485,7 +564,7 @@ static void SpawnEnemy(void)
     for (int i = 0; i < MAX_ENEMIES; i++) {
         if (enemies[i].active) continue;
         Enemy *e = &enemies[i];
-        float baseHp = ENEMY_BASE_HP * powf(HP_GROWTH, (float)(wave - 1));
+        float baseHp = ENEMY_BASE_HP * LEVELS[currentLevel].hpMult * powf(HP_GROWTH, (float)(wave - 1));
 
         EnemyKind kind = ENEMY_NORMAL;
         if (wave % 5 == 0 && spawnedInWave == waveSize - 1) kind = ENEMY_TANK;
@@ -718,7 +797,11 @@ static void UpdateWave(float dt)
     int seedBonus = SEEDS_PER_WAVE + ((wave % 5 == 0) ? SEEDS_BOSS_WAVE : 0);
     money += bonus;
     AddSeeds(seedBonus);
-    if (wave >= MAX_WAVES) state = STATE_VICTORY;
+    if (wave >= MAX_WAVES) {
+        state = STATE_VICTORY;
+        levelsWon |= 1 << currentLevel;
+        SaveProgress();
+    }
     else if (spawn2C >= 0 && wave == SECOND_ENTRANCE_WAVE - 1)
         ShowMessage("Atenção: na próxima onda abre uma NOVA ENTRADA!");
     else ShowMessage(TextFormat("Onda %d completa! +$%d  +%d semente(s)", wave, bonus, seedBonus));
@@ -966,8 +1049,8 @@ static bool IsRoadAt(int c, int r) { return InBounds(c, r) && grid[r][c] == TILE
 static void DrawGrassTile(int c, int r)
 {
     int v = (int)(Hash2(c, r) % 9) - 4;
-    Color g = ((r + c) % 2 == 0) ? (Color){ (unsigned char)(98 + v), (unsigned char)(162 + v), (unsigned char)(82 + v), 255 }
-                                 : (Color){ (unsigned char)(90 + v), (unsigned char)(152 + v), (unsigned char)(76 + v), 255 };
+    Color base = ((r + c) % 2 == 0) ? LEVELS[currentLevel].grassA : LEVELS[currentLevel].grassB;
+    Color g = { (unsigned char)(base.r + v), (unsigned char)(base.g + v), (unsigned char)(base.b + v), 255 };
     DrawRectangle(c * TILE, r * TILE, TILE, TILE, g);
 }
 
@@ -1544,8 +1627,8 @@ static void DrawUI(void)
     } else {
         Rectangle hint = { rx, y0 + 46.0f, 280, 34 };
         DrawRectangleRounded(hint, 0.3f, 8, (Color){ 32, 42, 34, 255 });
-        DesenharTexto("Clique numa planta para", (int)rx + 10, y0 + 50, 13, UI_MUTED);
-        DesenharTexto(upgradesUnlocked ? "ver detalhes, melhorar ou vender" : "ver detalhes ou vender",
+        DesenharTexto(TextFormat("Fase %d: %s", currentLevel + 1, LEVELS[currentLevel].name), (int)rx + 10, y0 + 50, 13, UI_ACCENT);
+        DesenharTexto(upgradesUnlocked ? "Clique numa planta: detalhes, melhorar, vender" : "Clique numa planta: detalhes ou vender",
                  (int)rx + 10, y0 + 64, 13, UI_MUTED);
     }
 
@@ -1676,7 +1759,7 @@ static void DrawMenu(void)
     const char *tips[] = {
         "As pragas seguem a estrada - plante na grama, perto das curvas.",
         "Só dá para plantar quando a onda acaba.",
-        TextFormat("Na onda %d abre uma segunda entrada!", SECOND_ENTRANCE_WAVE),
+        TextFormat("%d fases: vença uma para liberar a próxima.", LEVEL_COUNT),
         "Ganhe sementes e libere novas plantas na loja (o progresso fica salvo).",
     };
     for (int i = 0; i < 4; i++) {
@@ -1686,10 +1769,90 @@ static void DrawMenu(void)
     }
 
     if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 230, 534, 220, 52 }, "Jogar [ENTER]", NULL, true, true))
-        state = STATE_PLAYING;
+        state = STATE_LEVELS;
     if (DrawButton((Rectangle){ SCREEN_W / 2.0f + 10, 534, 220, 52 }, "Loja [L]", NULL, true, false))
         OpenShop();
     DrawCentered("Feito em C com raylib", 604, 12, UI_MUTED);
+}
+
+/* Comeca (ou recomeca) uma fase */
+static void StartLevel(int i)
+{
+    if (i < 0 || i >= LEVEL_COUNT || !LevelUnlocked(i)) return;
+    currentLevel = i;
+    ResetGame();
+    state = STATE_PLAYING;
+    ShowMessage(TextFormat("Fase %d: %s", i + 1, LEVELS[i].name));
+}
+
+/* Miniatura do mapa de uma fase, desenhada direto do texto do mapa */
+static void DrawMiniMap(int level, float x, float y, float cell)
+{
+    const LevelInfo *lv = &LEVELS[level];
+    for (int r = 0; r < ROWS; r++) {
+        for (int c = 0; c < COLS; c++) {
+            char ch = lv->map[r][c];
+            Color col = ((r + c) % 2 == 0) ? lv->grassA : lv->grassB;
+            if (ch == '=' || ch == 'S' || ch == 'B') col = (Color){ 188, 152, 104, 255 };
+            if (ch == '+' || ch == 'T')              col = (Color){ 160, 130, 92, 255 };
+            if (ch == '#')                           col = (Color){ 120, 122, 128, 255 };
+            DrawRectangle((int)(x + c * cell), (int)(y + r * cell), (int)cell + 1, (int)cell + 1, col);
+            if (ch == 'S' || ch == 'T') DrawCircle((int)(x + c * cell + cell / 2), (int)(y + r * cell + cell / 2), cell * 0.4f, (Color){ 40, 26, 18, 255 });
+            if (ch == 'B') DrawCircle((int)(x + c * cell + cell / 2), (int)(y + r * cell + cell / 2), cell * 0.45f, (Color){ 196, 64, 52, 255 });
+        }
+    }
+    DrawRectangleLinesEx((Rectangle){ x - 1, y - 1, COLS * cell + 2, ROWS * cell + 2 }, 2, Fade(BLACK, 0.4f));
+}
+
+static void DrawLevelSelect(void)
+{
+    DrawCentered("ESCOLHA A FASE", 34, 44, UI_ACCENT);
+    DrawCentered("Vença uma fase para liberar a próxima", 90, 18, UI_MUTED);
+
+    for (int i = 0; i < LEVEL_COUNT; i++) {
+        const LevelInfo *lv = &LEVELS[i];
+        bool open = LevelUnlocked(i), won = (levelsWon & (1 << i)) != 0;
+        Rectangle card = { 30.0f + i * 310, 130, 280, 420 };
+        DrawPanel(card, UI_PANEL, won ? (Color){ 110, 200, 90, 255 } : open ? UI_BORDER : (Color){ 70, 76, 72, 255 });
+        int x = (int)card.x, y = (int)card.y;
+
+        DrawMiniMap(i, card.x + 20, card.y + 18, 12);
+        if (won) {
+            Rectangle badge = { card.x + 176, card.y + 24, 78, 22 };
+            DrawRectangleRounded(badge, 0.5f, 8, (Color){ 60, 140, 60, 255 });
+            DesenharTexto("VENCIDA", (int)badge.x + 10, (int)badge.y + 3, 14, UI_TEXT);
+        }
+
+        DesenharTexto(TextFormat("Fase %d", i + 1), x + 20, y + 176, 14, UI_MUTED);
+        DrawTextShadow(lv->name, x + 20, y + 194, 28, UI_TEXT);
+        DesenharTexto(lv->desc, x + 20, y + 230, 13, UI_MUTED);
+
+        DesenharTexto("Dificuldade", x + 20, y + 258, 14, UI_TEXT);
+        for (int k = 0; k < LEVEL_COUNT; k++) {
+            Color pip = k <= i ? (Color){ 230, 90, 70, 255 } : (Color){ 60, 68, 62, 255 };
+            DrawCircle(x + 130 + k * 20, y + 266, 6, pip);
+        }
+        DesenharTexto(TextFormat("Estrada: %d passos até a casa", lv->pathLen), x + 20, y + 286, 14, UI_TEXT);
+        DrawCoin((Vector2){ x + 27.0f, y + 316.0f }, 6);
+        DesenharTexto(TextFormat("Dinheiro inicial: $%d", lv->startMoney), x + 38, y + 308, 14, UI_TEXT);
+        DrawFlagIcon((Vector2){ x + 27.0f, y + 338.0f }, 7);
+        DesenharTexto(TextFormat("2ª entrada abre na onda %d", lv->secondWave), x + 38, y + 330, 14, UI_TEXT);
+
+        if (DrawButton((Rectangle){ card.x + 20, card.y + 362, 240, 42 }, TextFormat("Jogar [%d]", i + 1), NULL, open, open))
+            StartLevel(i);
+
+        if (!open) {
+            DrawRectangleRounded(card, 0.08f, 8, Fade(BLACK, 0.55f));
+            DrawLockIcon((Vector2){ card.x + card.width / 2, card.y + 78 }, 3.0f, UI_TEXT);
+            const char *need = TextFormat("Vença a fase %d", i);
+            DrawTextShadow(need, (int)(card.x + (card.width - MedirTexto(need, 20)) / 2), (int)card.y + 116, 20, UI_TEXT);
+        }
+    }
+
+    if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 584, 220, 42 }, "Voltar [ESC]", NULL, true, false))
+        state = STATE_MENU;
+    if (state == STATE_PLAYING) return;
+    DrawToast(640);
 }
 
 static void DrawEndScreen(bool victory)
@@ -1714,10 +1877,18 @@ static void DrawEndScreen(bool victory)
     DrawSeedIcon((Vector2){ pnl.x + 150, y + 74.0f }, 9);
     DesenharTexto(TextFormat("Sementes guardadas: %d", seeds), (int)pnl.x + 170, y + 64, 20, UI_TEXT);
 
-    if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 130, pnl.y + 260, 260, 50 }, "Jogar de novo [ENTER]", NULL, true, true)) {
-        ResetGame();
-        state = STATE_PLAYING;
+    DrawCentered(TextFormat("Fase %d: %s", currentLevel + 1, LEVELS[currentLevel].name), (int)pnl.y + 118, 14, UI_MUTED);
+
+    bool hasNext = victory && currentLevel + 1 < LEVEL_COUNT;
+    const char *mainLabel = hasNext ? "Próxima fase [ENTER]" : victory ? "Jogar de novo [ENTER]" : "Tentar de novo [ENTER]";
+    if (DrawButton((Rectangle){ pnl.x + 20, pnl.y + 262, 225, 50 }, mainLabel, NULL, true, true)) {
+        if (hasNext) StartLevel(currentLevel + 1);
+        else         StartLevel(currentLevel);
     }
+    if (DrawButton((Rectangle){ pnl.x + 255, pnl.y + 262, 225, 50 }, "Escolher fase", NULL, true, false))
+        state = STATE_LEVELS;
+    if (victory && !hasNext)
+        DrawCentered("Você venceu todas as fases!", (int)pnl.y + 238, 16, UI_ACCENT);
 }
 
 static void DrawOverlay(void)
@@ -1727,14 +1898,18 @@ static void DrawOverlay(void)
 
     switch (state) {
         case STATE_MENU:     DrawMenu(); break;
+        case STATE_LEVELS:   DrawLevelSelect(); break;
         case STATE_SHOP:     DrawShop(); break;
         case STATE_TUTORIAL: DrawUpgradeTutorial(); break;
         case STATE_PAUSED: {
-            DrawPanel((Rectangle){ SCREEN_W / 2.0f - 200, 230, 400, 210 }, (Color){ 30, 42, 32, 248 }, UI_BORDER);
-            DrawCentered("PAUSADO", 256, 48, UI_TEXT);
-            if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 330, 220, 46 }, "Continuar [P]", NULL, true, true))
+            DrawPanel((Rectangle){ SCREEN_W / 2.0f - 200, 210, 400, 270 }, (Color){ 30, 42, 32, 248 }, UI_BORDER);
+            DrawCentered("PAUSADO", 234, 48, UI_TEXT);
+            DrawCentered(TextFormat("Fase %d: %s", currentLevel + 1, LEVELS[currentLevel].name), 290, 16, UI_MUTED);
+            if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 322, 220, 46 }, "Continuar [P]", NULL, true, true))
                 state = STATE_PLAYING;
-            DrawCentered("Esc também continua", 396, 14, UI_MUTED);
+            if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 378, 220, 46 }, "Escolher fase", NULL, true, false))
+                state = STATE_LEVELS;
+            DrawCentered("Esc também continua", 442, 14, UI_MUTED);
         } break;
         case STATE_GAMEOVER: DrawEndScreen(false); break;
         case STATE_VICTORY:  DrawEndScreen(true); break;
@@ -1761,8 +1936,13 @@ int main(void)
 
         switch (state) {
             case STATE_MENU:
-                if (IsKeyPressed(KEY_ENTER)) state = STATE_PLAYING;
+                if (IsKeyPressed(KEY_ENTER)) state = STATE_LEVELS;
                 else if (IsKeyPressed(KEY_L)) OpenShop();
+                break;
+            case STATE_LEVELS:
+                if (IsKeyPressed(KEY_ESCAPE)) state = STATE_MENU;
+                for (int i = 0; i < LEVEL_COUNT; i++)
+                    if (IsKeyPressed(KEY_ONE + i)) StartLevel(i);
                 break;
             case STATE_PLAYING:
                 if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE)) { state = STATE_PAUSED; break; }
@@ -1785,8 +1965,11 @@ int main(void)
                 if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)) state = STATE_PLAYING;
                 break;
             case STATE_GAMEOVER:
+                if (IsKeyPressed(KEY_ENTER)) StartLevel(currentLevel);
+                break;
             case STATE_VICTORY:
-                if (IsKeyPressed(KEY_ENTER)) { ResetGame(); state = STATE_PLAYING; }
+                if (IsKeyPressed(KEY_ENTER))
+                    StartLevel(currentLevel + 1 < LEVEL_COUNT ? currentLevel + 1 : currentLevel);
                 break;
         }
 

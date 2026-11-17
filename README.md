@@ -16,7 +16,25 @@ Sobreviver às **20 ondas** de inimigos sem perder todas as **20 vidas**.
 - Cada inimigo derrotado dá dinheiro.
 - Ao fim de cada onda, o jogador ganha um bônus em dinheiro.
 - **Só dá para plantar quando a onda acaba.** Ao começar uma onda, o modo de plantar é cancelado, os botões das plantas ficam apagados com "Aguarde", as teclas `1` a `6` não funcionam e aparece o aviso "Plante quando a onda acabar". Melhorar e vender continuam liberados.
-- **Na onda 10 abre uma segunda entrada** (canto inferior esquerdo). Até lá ela aparece fechada, coberta de mato e com uma placa "Onda 10", e já não aceita plantas. A partir da onda 10, os inimigos saem alternadamente pelas duas entradas. O jogo avisa ao terminar a onda 9.
+- **Cada fase tem uma segunda entrada** que abre numa onda definida (onda 10 no Jardim, 7 na Horta e 4 na Estufa). Até lá ela aparece fechada, coberta de mato e com uma placa com o número da onda, e já não aceita plantas. Depois que abre, os inimigos saem alternadamente pelas duas entradas. O jogo avisa uma onda antes.
+
+---
+
+## Fases
+
+![Escolha de fase](imagens/fases.png)
+
+O jogo tem **3 fases**, escolhidas numa tela própria (botão **Jogar** ou `Enter` no menu, depois `1`, `2` ou `3`). **Vencer uma fase libera a próxima.**
+
+| Fase | Mapa | Estrada | 2ª entrada | Dinheiro inicial | Vida das pragas |
+|------|------|---------|------------|------------------|-----------------|
+| 1. Jardim | Zigue-zague longo, entradas à esquerda | 38 passos | Onda 10 | $150 | Normal |
+| 2. Horta | Estrada desce do topo, caminho mais curto | 30 passos | Onda 7 | $160 | Normal |
+| 3. Estufa | Duas entradas, uma de cada lado, que se encontram no meio | 18 passos | Onda 4 | $180 | −15% (para compensar a estrada curtíssima) |
+
+Cada fase tem uma cor de grama diferente. Ao vencer, a tela de vitória oferece **Próxima fase**; ao perder, **Tentar de novo**. As duas também têm **Escolher fase**, que aparece ainda na tela de pausa.
+
+As fases ficam na tabela `LEVELS` do código. Para criar uma fase nova, basta desenhar outro mapa em texto e escolher os números de dificuldade (`secondWave`, `hpMult`, `startMoney`) e aumentar `LEVEL_COUNT`.
 
 ---
 
@@ -48,7 +66,8 @@ Tudo é desenhado com as formas do raylib (círculos, retângulos arredondados, 
 | `F`                  | Alternar velocidade (1x / 2x)               |
 | `D`                  | Mostrar o mapa de distâncias da BFS         |
 | `P` / `Esc`          | Pausar                                      |
-| `Enter`              | Começar / reiniciar                         |
+| `Enter`              | Abrir a escolha de fase / próxima fase / tentar de novo |
+| `1` `2` `3` (na escolha de fase) | Jogar a fase                     |
 
 ---
 
@@ -97,9 +116,10 @@ As sementes e as torres liberadas são salvas no arquivo **`progresso.txt`**, cr
 ```
 sementes 7
 torres 1 1 0 1 0 0
+fases 1
 ```
 
-Cada número da linha `torres` indica se a torre de mesma posição (1 a 6) está liberada (`1`) ou não (`0`). Para **zerar o progresso**, é só apagar esse arquivo.
+Cada número da linha `torres` indica se a torre de mesma posição (1 a 6) está liberada (`1`) ou não (`0`). A linha `fases` guarda quais fases já foram vencidas (bit 1 = Jardim, bit 2 = Horta, bit 4 = Estufa; por exemplo, `3` = Jardim e Horta vencidos). Arquivos antigos, sem essa linha, continuam funcionando. Para **zerar o progresso**, é só apagar esse arquivo.
 
 ## Inimigos
 
@@ -109,22 +129,24 @@ Cada número da linha `torres` indica se a torre de mesma posição (1 a 6) est�
 | Rápido  | 60% base  | alta       | $6         | A partir da onda 3           |
 | Tanque  | 8× base   | baixa      | $40        | Chefe a cada 5 ondas         |
 
-A vida base cresce **20% a cada onda** (constantes `ENEMY_BASE_HP` e `HP_GROWTH`).
+A vida base cresce **20,5% a cada onda** (constantes `ENEMY_BASE_HP` e `HP_GROWTH`) e ainda é multiplicada pelo `hpMult` da fase.
 
 ### Balanceamento
 
-Os preços, os bônus de melhoria e o crescimento da vida dos inimigos foram ajustados com um **simulador**. Ele usa o próprio código do jogo, sem janela, e um "bot" que joga as 20 ondas sozinho (plantando entre as ondas e melhorando a partir da onda 5). Resultado com os valores atuais:
+Os preços, os bônus de melhoria, o crescimento da vida dos inimigos e a dificuldade de cada fase foram ajustados com um **simulador**. Ele usa o próprio código do jogo, sem janela, e um "bot" que joga as 20 ondas sozinho (plantando entre as ondas e melhorando a partir da onda 5) com 7 estratégias diferentes. Resultado com os valores atuais:
 
-| Estratégia do bot          | Resultado              |
-|----------------------------|------------------------|
-| Só Brotinho                | Vence com 11 vidas     |
-| Brotinho + Cacto           | Vence com 14 vidas     |
-| Brotinho + Abóbora         | Vence com 10 vidas     |
-| Brotinho + Urtiga          | Vence com 18 vidas     |
-| Brotinho + Girassol        | Vence com 16 vidas     |
-| Todas as plantas misturadas| Vence com 14 vidas     |
+| Estratégia do bot          | 1. Jardim          | 2. Horta           | 3. Estufa          |
+|----------------------------|--------------------|--------------------|--------------------|
+| Só Brotinho                | Perde na onda 20   | Perde na onda 20   | Vence (11 vidas)   |
+| Brotinho + Cacto           | Vence (1 vida)     | Perde na onda 20   | Perde na onda 19   |
+| Brotinho + Menta           | Perde na onda 19   | Perde na onda 18   | Perde na onda 19   |
+| Brotinho + Abóbora         | Vence (9 vidas)    | Vence (3 vidas)    | Vence (7 vidas)    |
+| Brotinho + Urtiga          | Vence (16 vidas)   | Perde na onda 18   | Perde na onda 16   |
+| Brotinho + Girassol        | Vence (3 vidas)    | Vence (8 vidas)    | Vence (8 vidas)    |
+| Todas as plantas misturadas| Vence (3 vidas)    | Vence (1 vida)     | Perde na onda 18   |
+| **Total de vitórias**      | **5 de 7**         | **3 de 7**         | **3 de 7**         |
 
-Com o crescimento antigo de 22%, nenhuma estratégia vencia.
+Antes desta versão (crescimento de 20% e só a fase Jardim), 6 de 7 estratégias venciam o Jardim com 10 a 18 vidas sobrando. Um jogador de verdade, que escolhe bem os lugares e usa a Menta nas curvas, costuma se sair melhor que o bot.
 
 ---
 
@@ -183,18 +205,18 @@ O mapa é definido como texto no início do código e pode ser editado facilment
 =  estrada (os inimigos andam por aqui; não pode construir)
 #  pedra (não dá para construir nem passar)
 S  entrada dos inimigos
-T  segunda entrada (abre na onda SECOND_ENTRANCE_WAVE = 10)
+T  segunda entrada (abre na onda secondWave da fase)
 +  estrada da segunda entrada (fechada até abrir, mas já não aceita plantas)
 B  base
 ```
 
-A estrada da segunda entrada se junta à estrada principal. Como a BFS parte da base, os inimigos das duas entradas encontram o caminho sozinhos, sem nenhum código extra de rota.
+A estrada da segunda entrada se junta à estrada principal. Como a BFS parte da base, os inimigos das duas entradas encontram o caminho sozinhos, sem nenhum código extra de rota. Cada fase tem o seu mapa na tabela `LEVELS`.
 
 ---
 
 ## Possíveis melhorias
 
-- Carregar várias fases a partir de arquivos `.txt`
+- Carregar as fases a partir de arquivos `.txt`, em vez de deixá-las no código
 - Sprites e animações no lugar das formas geométricas
 - Efeitos sonoros e música
 - Salvar recorde em arquivo
