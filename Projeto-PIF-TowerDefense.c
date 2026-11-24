@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <math.h>
+#include <stdlib.h>
 
 /* ------------------------------------------------------------------ */
 /* Configuracoes                                                      */
@@ -399,9 +400,142 @@ static void SpawnFloat(Vector2 pos, const char *text, Color color)
 static const int DC[4] = { 1, -1, 0, 0 };
 static const int DR[4] = { 0, 0, 1, -1 };
 
+/* ------------------------------------------------------------------ */
+/* Sons: todos gerados pelo proprio codigo (ondas senoidais, quadradas */
+/* e ruido), sem nenhum arquivo de audio                              */
+/* ------------------------------------------------------------------ */
+typedef enum {
+    SFX_SHOOT, SFX_POP, SFX_BOOM, SFX_WAVE, SFX_BOSS, SFX_HURT, SFX_PLANT,
+    SFX_UPGRADE, SFX_SELL, SFX_ERROR, SFX_CLICK, SFX_WIN, SFX_LOSE, SFX_COUNT
+} SfxId;
+
+#define SFX_VOICES  4          /* copias de cada som, para tocar varias vezes ao mesmo tempo */
+#define SFX_RATE    22050
+
+static Sound  sfx[SFX_COUNT][SFX_VOICES];
+static int    sfxNext[SFX_COUNT];
+static double sfxLast[SFX_COUNT];
+static bool   soundsReady = false;
+static bool   soundOn = true;      /* tecla M liga/desliga (salvo no progresso) */
+
+/* Recordes por fase (salvos no progresso) */
+static int  bestWave[LEVEL_COUNT];   /* melhor onda alcancada (20 = venceu) */
+static int  bestLives[LEVEL_COUNT];  /* mais vidas sobrando numa vitoria */
+static bool newRecord = false;       /* a partida que acabou bateu o recorde? */
+
+/* forma: 0 = senoide, 1 = quadrada, 2 = triangulo */
+static void SynthAdd(float *buf, int total, float start, float dur, float f0, float f1,
+                     int shape, float noise, float vol)
+{
+    int s0 = (int)(start * SFX_RATE), n = (int)(dur * SFX_RATE);
+    float phase = 0;
+    unsigned int seed = 12345u + (unsigned int)s0;
+    for (int i = 0; i < n && s0 + i < total; i++) {
+        float t = (float)i / n;
+        phase += 2 * PI * (f0 + (f1 - f0) * t) / SFX_RATE;
+        float v = shape == 1 ? (sinf(phase) >= 0 ? 1.0f : -1.0f)
+                : shape == 2 ? 2.0f / PI * asinf(sinf(phase))
+                : sinf(phase);
+        seed = seed * 1664525u + 1013904223u;
+        float nz = (seed >> 9) / 8388608.0f * 2 - 1;
+        v = v * (1 - noise) + nz * noise;
+        float env = (t < 0.04f ? t / 0.04f : 1.0f) * (1 - t) * (1 - t);   /* ataque rapido e queda */
+        buf[s0 + i] += v * env * vol;
+    }
+}
+
+static Sound MakeSound(const float *buf, int n)
+{
+    short *pcm = (short *)malloc(n * sizeof(short));
+    for (int i = 0; i < n; i++) pcm[i] = (short)(Clamp(buf[i], -1, 1) * 32000);
+    Wave w = { (unsigned int)n, SFX_RATE, 16, 1, pcm };
+    Sound snd = LoadSoundFromWave(w);
+    free(pcm);
+    return snd;
+}
+
+static void LoadSounds(void)
+{
+    if (!IsAudioDeviceReady()) return;
+    static float buf[SFX_RATE];          /* 1 segundo no maximo */
+    for (int id = 0; id < SFX_COUNT; id++) {
+        memset(buf, 0, sizeof(buf));
+        float dur = 0.2f, vol = 0.7f;
+        switch (id) {
+            case SFX_SHOOT:   dur = 0.07f; vol = 0.35f; SynthAdd(buf, SFX_RATE, 0, dur, 900, 420, 0, 0.1f, 0.6f); break;
+            case SFX_POP:     dur = 0.14f; vol = 0.5f;  SynthAdd(buf, SFX_RATE, 0, dur, 700, 160, 1, 0, 0.25f);
+                                                        SynthAdd(buf, SFX_RATE, 0, 0.07f, 300, 300, 0, 1, 0.3f); break;
+            case SFX_BOOM:    dur = 0.45f;              SynthAdd(buf, SFX_RATE, 0, dur, 130, 40, 0, 0.85f, 0.9f); break;
+            case SFX_WAVE:    dur = 0.45f;              SynthAdd(buf, SFX_RATE, 0.00f, 0.14f, 523, 523, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.12f, 0.14f, 659, 659, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.24f, 0.21f, 784, 784, 2, 0, 0.45f); break;
+            case SFX_BOSS:    dur = 0.9f;               SynthAdd(buf, SFX_RATE, 0.00f, 0.42f, 110, 100, 1, 0, 0.22f);
+                                                        SynthAdd(buf, SFX_RATE, 0.00f, 0.42f, 165, 150, 1, 0, 0.14f);
+                                                        SynthAdd(buf, SFX_RATE, 0.45f, 0.45f, 98, 82, 1, 0, 0.22f);
+                                                        SynthAdd(buf, SFX_RATE, 0.45f, 0.45f, 147, 123, 1, 0, 0.14f); break;
+            case SFX_HURT:    dur = 0.3f;               SynthAdd(buf, SFX_RATE, 0, dur, 170, 55, 1, 0, 0.35f);
+                                                        SynthAdd(buf, SFX_RATE, 0, 0.15f, 200, 200, 0, 1, 0.3f); break;
+            case SFX_PLANT:   dur = 0.13f;              SynthAdd(buf, SFX_RATE, 0, dur, 280, 560, 0, 0.05f, 0.6f); break;
+            case SFX_UPGRADE: dur = 0.38f;              SynthAdd(buf, SFX_RATE, 0.00f, 0.12f, 660, 660, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.09f, 0.12f, 880, 880, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.18f, 0.20f, 1320, 1320, 2, 0, 0.4f); break;
+            case SFX_SELL:    dur = 0.24f;              SynthAdd(buf, SFX_RATE, 0.00f, 0.11f, 880, 880, 2, 0, 0.4f);
+                                                        SynthAdd(buf, SFX_RATE, 0.10f, 0.14f, 587, 587, 2, 0, 0.4f); break;
+            case SFX_ERROR:   dur = 0.18f; vol = 0.5f;  SynthAdd(buf, SFX_RATE, 0.00f, 0.08f, 190, 190, 1, 0, 0.25f);
+                                                        SynthAdd(buf, SFX_RATE, 0.09f, 0.09f, 160, 160, 1, 0, 0.25f); break;
+            case SFX_CLICK:   dur = 0.04f; vol = 0.45f; SynthAdd(buf, SFX_RATE, 0, dur, 1300, 900, 0, 0, 0.5f); break;
+            case SFX_WIN:     dur = 0.95f;              SynthAdd(buf, SFX_RATE, 0.00f, 0.16f, 523, 523, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.15f, 0.16f, 659, 659, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.30f, 0.16f, 784, 784, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.45f, 0.50f, 1047, 1047, 2, 0, 0.45f); break;
+            case SFX_LOSE:    dur = 0.95f;              SynthAdd(buf, SFX_RATE, 0.00f, 0.28f, 392, 380, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.27f, 0.28f, 330, 318, 2, 0, 0.45f);
+                                                        SynthAdd(buf, SFX_RATE, 0.54f, 0.41f, 262, 240, 2, 0, 0.45f); break;
+        }
+        sfx[id][0] = MakeSound(buf, (int)(dur * SFX_RATE));
+        SetSoundVolume(sfx[id][0], vol);
+        for (int v = 1; v < SFX_VOICES; v++) {
+            sfx[id][v] = LoadSoundAlias(sfx[id][0]);
+            SetSoundVolume(sfx[id][v], vol);
+        }
+    }
+    soundsReady = true;
+}
+
+static void UnloadSounds(void)
+{
+    if (!soundsReady) return;
+    for (int id = 0; id < SFX_COUNT; id++) {
+        for (int v = 1; v < SFX_VOICES; v++) UnloadSoundAlias(sfx[id][v]);
+        UnloadSound(sfx[id][0]);
+    }
+    soundsReady = false;
+}
+
+/* Toca um som (com tom ajustavel). Tiros e estouros tem um intervalo minimo
+   para nao virar barulho quando muitas plantas atiram juntas. */
+static void SfxPitch(SfxId id, float pitch)
+{
+    if (!soundsReady || !soundOn) return;
+    double now = GetTime();
+    double gap = id == SFX_SHOOT ? 0.05 : id == SFX_POP ? 0.035 : 0.0;
+    if (now - sfxLast[id] < gap) return;
+    sfxLast[id] = now;
+    Sound snd = sfx[id][sfxNext[id]];
+    sfxNext[id] = (sfxNext[id] + 1) % SFX_VOICES;
+    SetSoundPitch(snd, pitch);
+    PlaySound(snd);
+}
+
+static void Sfx(SfxId id) { SfxPitch(id, 1.0f); }
+
 static float TowerRange(const Tower *t)    { return TOWER_INFO[t->kind].range    * (1.0f + UPG_RANGE    * (t->level - 1)); }
 static float TowerDamage(const Tower *t)   { return TOWER_INFO[t->kind].damage   * (1.0f + UPG_DAMAGE   * (t->level - 1)); }
 static float TowerPoison(const Tower *t)   { return TOWER_INFO[t->kind].poisonDps * (1.0f + UPG_DAMAGE  * (t->level - 1)); }
+/* Menta: 50% de lentidao no nivel 1, +10% por nivel. Abobora: explosao +15% por nivel */
+static float TowerSlow(const Tower *t)   { return TOWER_INFO[t->kind].slow > 0 ? TOWER_INFO[t->kind].slow + 0.10f * (t->level - 1) : 0; }
+static float TowerSplash(const Tower *t) { return TOWER_INFO[t->kind].splash * (1.0f + 0.15f * (t->level - 1)); }
+#define FROST_AREA 42.0f   /* a lentidao da Menta pega tambem as pragas a ate 42 px do alvo */
 static float TowerFireRate(const Tower *t) { return TOWER_INFO[t->kind].fireRate * (1.0f + UPG_FIRERATE * (t->level - 1)); }
 static int   UpgradeCost(const Tower *t)   { return TOWER_INFO[t->kind].cost * t->level; }
 static int   SellValue(const Tower *t)     { return (int)(t->invested * 0.7f); }
@@ -413,6 +547,9 @@ static int   SellValue(const Tower *t)     { return (int)(t->invested * 0.7f); }
  *   sementes 7
  *   torres 1 1 1 1 0 0
  *   fases 1          (bit i = fase i vencida: 1 = Jardim, 3 = Jardim e Horta)
+ *   recordes 20 12 0 (melhor onda alcancada em cada fase; 20 = venceu)
+ *   vidas 14 0 0     (mais vidas sobrando numa vitoria, por fase)
+ *   som 1            (1 = ligado, 0 = desligado)
  */
 static void SaveProgress(void)
 {
@@ -420,7 +557,11 @@ static void SaveProgress(void)
     if (!f) return;
     fprintf(f, "sementes %d\ntorres", seeds);
     for (int i = 0; i < TOWER_COUNT; i++) fprintf(f, " %d", unlocked[i] ? 1 : 0);
-    fprintf(f, "\nfases %d\n", levelsWon);
+    fprintf(f, "\nfases %d\nrecordes", levelsWon);
+    for (int i = 0; i < LEVEL_COUNT; i++) fprintf(f, " %d", bestWave[i]);
+    fprintf(f, "\nvidas");
+    for (int i = 0; i < LEVEL_COUNT; i++) fprintf(f, " %d", bestLives[i]);
+    fprintf(f, "\nsom %d\n", soundOn ? 1 : 0);
     fclose(f);
 }
 
@@ -428,6 +569,8 @@ static void LoadProgress(void)
 {
     seeds = 0;
     levelsWon = 0;
+    soundOn = true;
+    for (int i = 0; i < LEVEL_COUNT; i++) bestWave[i] = bestLives[i] = 0;
     for (int i = 0; i < TOWER_COUNT; i++) unlocked[i] = (TOWER_INFO[i].seedPrice == 0);
 
     FILE *f = fopen(SAVE_FILE, "r");
@@ -443,6 +586,14 @@ static void LoadProgress(void)
     }
     int fw;
     if (fscanf(f, " fases %d", &fw) == 1 && fw >= 0) levelsWon = fw;   /* arquivos antigos nao tem esta linha */
+    /* linhas opcionais (versoes antigas do arquivo nao tem): %n diz se a palavra foi lida */
+    int got = 0, v;
+    if (fscanf(f, " recordes%n", &got) >= 0 && got > 0)
+        for (int i = 0; i < LEVEL_COUNT && fscanf(f, " %d", &v) == 1; i++) bestWave[i] = v;
+    got = 0;
+    if (fscanf(f, " vidas%n", &got) >= 0 && got > 0)
+        for (int i = 0; i < LEVEL_COUNT && fscanf(f, " %d", &v) == 1; i++) bestLives[i] = v;
+    if (fscanf(f, " som %d", &v) == 1) soundOn = (v != 0);
     fclose(f);
 }
 
@@ -455,10 +606,11 @@ static void AddSeeds(int n)
 static void BuyTower(int kind)
 {
     if (unlocked[kind]) return;
-    if (seeds < TOWER_INFO[kind].seedPrice) { ShowMessage("Sementes insuficientes"); return; }
+    if (seeds < TOWER_INFO[kind].seedPrice) { ShowMessage("Sementes insuficientes"); Sfx(SFX_ERROR); return; }
     seeds -= TOWER_INFO[kind].seedPrice;
     unlocked[kind] = true;
     SaveProgress();
+    Sfx(SFX_UPGRADE);
     ShowMessage(TextFormat("%s liberada! Tecla %d", TOWER_INFO[kind].name, kind + 1));
 }
 
@@ -569,19 +721,21 @@ static void PlaceTower(int c, int r, TowerKind kind)
     towers[r][c] = (Tower){ .active = true, .kind = kind, .level = 1,
                             .invested = TOWER_INFO[kind].cost, .cooldown = 0, .angle = 0 };
     money -= TOWER_INFO[kind].cost;
+    Sfx(SFX_PLANT);
 }
 
 static void UpgradeSelected(void)
 {
     if (selC < 0) return;
     Tower *t = &towers[selR][selC];
-    if (!upgradesUnlocked) { ShowMessage(TextFormat("Melhorias liberadas na onda %d", UPGRADE_UNLOCK_WAVE)); return; }
-    if (t->level >= MAX_LEVEL) { ShowMessage("Nível máximo"); return; }
+    if (!upgradesUnlocked) { ShowMessage(TextFormat("Melhorias liberadas na onda %d", UPGRADE_UNLOCK_WAVE)); Sfx(SFX_ERROR); return; }
+    if (t->level >= MAX_LEVEL) { ShowMessage("Nível máximo"); Sfx(SFX_ERROR); return; }
     int cost = UpgradeCost(t);
-    if (money < cost) { ShowMessage("Dinheiro insuficiente"); return; }
+    if (money < cost) { ShowMessage("Dinheiro insuficiente"); Sfx(SFX_ERROR); return; }
     money -= cost;
     t->invested += cost;
     t->level++;
+    Sfx(SFX_UPGRADE);
 }
 
 static void SellSelected(void)
@@ -589,6 +743,7 @@ static void SellSelected(void)
     if (selC < 0) return;
     Tower *t = &towers[selR][selC];
     money += SellValue(t);
+    Sfx(SFX_SELL);
     t->active = false;
     grid[selR][selC] = TILE_EMPTY;
     selC = selR = -1;
@@ -609,6 +764,26 @@ static void StartWave(void)
     else                                                     snprintf(bannerSub, sizeof(bannerSub), "%d pragas a caminho", waveSize);
     selBuild = -1;   /* so da para plantar entre as ondas */
     spawnTimer = 0;
+    Sfx(bannerBoss ? SFX_BOSS : SFX_WAVE);
+}
+
+/* Acaba a partida: atualiza recordes, salva e toca o som de vitoria ou derrota */
+static void FinishGame(bool victory)
+{
+    int lv = currentLevel;
+    newRecord = false;
+    if (victory) {
+        levelsWon |= 1 << lv;
+        newRecord = bestWave[lv] < MAX_WAVES || lives > bestLives[lv];
+        bestWave[lv] = MAX_WAVES;
+        if (lives > bestLives[lv]) bestLives[lv] = lives;
+    } else if (wave > bestWave[lv] && bestWave[lv] < MAX_WAVES) {
+        newRecord = bestWave[lv] > 0;      /* a primeira partida da fase nao conta como recorde batido */
+        bestWave[lv] = wave;
+    }
+    state = victory ? STATE_VICTORY : STATE_GAMEOVER;
+    SaveProgress();
+    Sfx(victory ? SFX_WIN : SFX_LOSE);
 }
 
 static void SpawnEnemy(void)
@@ -669,6 +844,7 @@ static void DamageEnemy(Enemy *e, float dmg)
         Burst(e->pos, e->kind == ENEMY_TANK ? 18 : 8, 70, 0.45f, e->kind == ENEMY_TANK ? 7 : 4.5f, 0, (Color){ 235, 230, 220, 200 });
         Burst(e->pos, e->kind == ENEMY_TANK ? 12 : 5, 110, 0.55f, 3, 220, e->color);
         SpawnFloat(e->pos, TextFormat("+$%d", e->reward), (Color){ 255, 214, 80, 255 });
+        SfxPitch(SFX_POP, RandF(0.9f, 1.15f));
         if (e->kind == ENEMY_TANK) {
             AddSeeds(SEEDS_PER_TANK);
             ShowMessage(TextFormat("Tanque destruído! +%d sementes", SEEDS_PER_TANK));
@@ -706,8 +882,9 @@ static void UpdateEnemies(float dt)
                 lives -= (e->kind == ENEMY_TANK) ? 5 : 1;
                 baseFlash = 0.4f;
                 shake = 0.35f;
+                Sfx(SFX_HURT);
                 Burst(TileCenter(baseC, baseR), 12, 110, 0.5f, 4, 0, (Color){ 230, 60, 50, 255 });
-                if (lives <= 0) { lives = 0; state = STATE_GAMEOVER; }
+                if (lives <= 0) { lives = 0; FinishGame(false); }
                 continue;
             }
             PickNextTile(e);
@@ -724,15 +901,17 @@ static void FireProjectile(const Tower *t, Vector2 from, int targetIdx)
         projs[i] = (Projectile){
             .active = true, .pos = from,
             .target = targetIdx, .targetUid = enemies[targetIdx].uid,
-            .damage = TowerDamage(t), .slow = TOWER_INFO[t->kind].slow,
+            .damage = TowerDamage(t), .slow = TowerSlow(t),
             .speed = TOWER_INFO[t->kind].projSpeed, .size = TOWER_INFO[t->kind].projSize,
-            .splash = TOWER_INFO[t->kind].splash, .poisonDps = TowerPoison(t),
+            .splash = TowerSplash(t), .poisonDps = TowerPoison(t),
             .poisonPct = TOWER_INFO[t->kind].poisonPct * (1.0f + UPG_DAMAGE * (t->level - 1)),
             .color = TOWER_INFO[t->kind].color,
             .kind = t->kind,
             .dir = Vector2Normalize(Vector2Subtract(enemies[targetIdx].pos, from)),
             .total = fmaxf(1.0f, Vector2Distance(enemies[targetIdx].pos, from)),
         };
+        static const float SHOT_PITCH[TOWER_COUNT] = { 1.0f, 0.7f, 1.35f, 0.55f, 1.15f, 1.6f };
+        SfxPitch(SFX_SHOOT, SHOT_PITCH[t->kind] * RandF(0.95f, 1.05f));
         return;
     }
 }
@@ -847,6 +1026,7 @@ static void UpdateProjectiles(float dt)
             Burst(e->pos, 4, 60, 0.25f, 2.5f, 0, p->color);
             if (p->splash > 0) {
                 Burst(e->pos, 16, 150, 0.45f, 4.5f, 80, (Color){ 255, 150, 40, 255 });
+                Sfx(SFX_BOOM);
                 /* Dano em area: atinge todos os inimigos dentro do raio */
                 Vector2 hit = e->pos;
                 for (int j = 0; j < MAX_ENEMIES; j++)
@@ -854,6 +1034,15 @@ static void UpdateProjectiles(float dt)
                         ApplyHit(&enemies[j], p);
                 SpawnEffect(hit, p->splash, ORANGE);
             } else {
+                if (p->slow > 0) {   /* Menta: a lentidao pega as pragas em volta do alvo */
+                    for (int j = 0; j < MAX_ENEMIES; j++) {
+                        Enemy *o = &enemies[j];
+                        if (!o->active || o == e || Vector2Distance(e->pos, o->pos) > FROST_AREA + o->radius) continue;
+                        o->slowFactor = 1.0f - p->slow;
+                        o->slowTimer = 1.5f;
+                    }
+                    Burst(e->pos, 6, 70, 0.35f, 3, 0, (Color){ 200, 240, 255, 230 });
+                }
                 ApplyHit(e, p);
             }
             p->active = false;
@@ -885,9 +1074,7 @@ static void UpdateWave(float dt)
     money += bonus;
     AddSeeds(seedBonus);
     if (wave >= MAX_WAVES) {
-        state = STATE_VICTORY;
-        levelsWon |= 1 << currentLevel;
-        SaveProgress();
+        FinishGame(true);
     }
     else if (spawn2C >= 0 && wave == SECOND_ENTRANCE_WAVE - 1)
         ShowMessage("Atenção: na próxima onda abre uma NOVA ENTRADA!");
@@ -906,8 +1093,10 @@ static void HandleInput(void)
         if (!IsKeyPressed(KEY_ONE + i)) continue;
         if (waveActive) {
             ShowMessage("Só dá para plantar quando a onda acabar");
+            Sfx(SFX_ERROR);
         } else if (!unlocked[i]) {
             ShowMessage(TextFormat("%s bloqueada - compre na Loja [L]", TOWER_INFO[i].name));
+            Sfx(SFX_ERROR);
         } else {
             selBuild = (selBuild == i) ? -1 : i;
             selC = selR = -1;
@@ -930,8 +1119,8 @@ static void HandleInput(void)
             selC = c; selR = r; selBuild = -1;
         } else if (selBuild >= 0) {
             const char *reason;
-            if (money < TOWER_INFO[selBuild].cost) ShowMessage("Dinheiro insuficiente");
-            else if (!CanPlace(c, r, &reason))     ShowMessage(reason);
+            if (money < TOWER_INFO[selBuild].cost) { ShowMessage("Dinheiro insuficiente"); Sfx(SFX_ERROR); }
+            else if (!CanPlace(c, r, &reason))     { ShowMessage(reason); Sfx(SFX_ERROR); }
             else                                   PlaceTower(c, r, (TowerKind)selBuild);
         } else {
             selC = selR = -1;
@@ -1128,7 +1317,9 @@ static bool DrawButton(Rectangle rec, const char *line1, const char *line2, bool
             DesenharTexto(line1, (int)(r.x + (r.width - MedirTexto(line1, fs)) / 2), (int)(r.y + (r.height - fs) / 2), fs, fg);
         }
     }
-    return enabled && hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    bool clicked = enabled && hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    if (clicked) Sfx(SFX_CLICK);
+    return clicked;
 }
 
 /* ---------- Mapa ---------- */
@@ -1755,10 +1946,72 @@ static void DrawMapVignette(bool live)
     }
 }
 
+/* Mini icones das pragas (para o contador e a previa da onda) */
+static void DrawMiniBug(int kind, Vector2 c)
+{
+    Color dk = { 30, 20, 20, 255 };
+    if (kind == ENEMY_FAST) {            /* formiga */
+        Color body = { 214, 120, 40, 255 };
+        DrawLineEx((Vector2){ c.x - 7, c.y + 5 }, (Vector2){ c.x + 7, c.y - 5 }, 1.2f, (Color){ 90, 45, 15, 255 });
+        DrawLineEx((Vector2){ c.x - 7, c.y - 5 }, (Vector2){ c.x + 7, c.y + 5 }, 1.2f, (Color){ 90, 45, 15, 255 });
+        DrawCircleV((Vector2){ c.x - 6, c.y }, 4.5f, body);
+        DrawCircleV(c, 3, body);
+        DrawCircleV((Vector2){ c.x + 6, c.y }, 3.5f, body);
+    } else if (kind == ENEMY_TANK) {     /* caracol */
+        DrawCircleV((Vector2){ c.x + 4, c.y + 3 }, 4.5f, (Color){ 200, 190, 150, 255 });
+        DrawCircleV((Vector2){ c.x - 2, c.y }, 7, (Color){ 150, 70, 50, 255 });
+        DrawRing((Vector2){ c.x - 2, c.y }, 3, 4.5f, 0, 360, 16, (Color){ 200, 116, 72, 255 });
+    } else {                             /* joaninha vista de cima */
+        DrawCircleV((Vector2){ c.x, c.y - 6 }, 3.6f, dk);
+        DrawCircleV(c, 7, (Color){ 215, 50, 42, 255 });
+        DrawLineEx((Vector2){ c.x, c.y - 5 }, (Vector2){ c.x, c.y + 7 }, 1.2f, dk);
+        DrawCircleV((Vector2){ c.x - 3.2f, c.y - 1 }, 1.5f, dk);
+        DrawCircleV((Vector2){ c.x + 3.2f, c.y - 1 }, 1.5f, dk);
+        DrawCircleV((Vector2){ c.x - 2.8f, c.y + 3.5f }, 1.3f, dk);
+        DrawCircleV((Vector2){ c.x + 2.8f, c.y + 3.5f }, 1.3f, dk);
+    }
+}
+
+/* Antes de cada onda: quantas pragas de cada tipo vem (mesma regra do SpawnEnemy) */
+static void DrawNextWavePreview(void)
+{
+    int n = wave + 1;
+    if (n > MAX_WAVES) return;
+    int size = 6 + n * 2, boss = (n % 5 == 0) ? 1 : 0, fast = 0;
+    for (int i = 0; i < size; i++) {
+        if (boss && i == size - 1) continue;
+        if (n >= 3 && i % 3 == 2) fast++;
+    }
+    int counts[3] = { size - fast - boss, fast, boss };
+    bool entrance = spawn2C >= 0 && n == SECOND_ENTRANCE_WAVE;
+
+    const char *label = TextFormat("Próxima onda %d:", n);
+    int lw = MedirTexto(label, 16);
+    float w = 20 + lw + 12;
+    for (int k = 0; k < 3; k++) if (counts[k] > 0) w += 22 + MedirTexto(TextFormat("%d", counts[k]), 16) + 12;
+    float h = entrance || boss ? 54 : 32;
+    Rectangle pill = { SCREEN_W - 10 - w, 10, w, h };
+    DrawRectangleRounded((Rectangle){ pill.x + 2, pill.y + 3, pill.width, pill.height }, 0.4f, 8, Fade(BLACK, 0.3f));
+    DrawRectangleRounded(pill, 0.4f, 8, Fade(UI_BG, 0.9f));
+    DrawRectangleRoundedLinesEx(pill, 0.4f, 8, 1.5f, boss ? (Color){ 230, 100, 80, 255 } : UI_BORDER);
+    float x = pill.x + 14;
+    DesenharTexto(label, (int)x, (int)pill.y + 8, 16, UI_MUTED);
+    x += lw + 12;
+    for (int k = 0; k < 3; k++) {
+        if (counts[k] == 0) continue;
+        DrawMiniBug(k, (Vector2){ x + 8, pill.y + 17 });
+        const char *num = TextFormat("%d", counts[k]);
+        DesenharTexto(num, (int)x + 20, (int)pill.y + 8, 16, UI_TEXT);
+        x += 22 + MedirTexto(num, 16) + 12;
+    }
+    if (boss)          DesenharTexto("Onda de chefe!", (int)pill.x + 14, (int)pill.y + 31, 14, (Color){ 255, 150, 120, 255 });
+    else if (entrance) DesenharTexto("Abre a 2ª entrada!", (int)pill.x + 14, (int)pill.y + 31, 14, ORANGE);
+}
+
 /* Contador de pragas restantes no canto superior direito */
 static void DrawWaveCounter(void)
 {
-    if (!waveActive) return;
+    if (!waveActive) { DrawNextWavePreview(); return; }
     int alive = 0;
     for (int i = 0; i < MAX_ENEMIES; i++) if (enemies[i].active) alive++;
     int remaining = (waveSize - spawnedInWave) + alive;
@@ -1766,16 +2019,7 @@ static void DrawWaveCounter(void)
     DrawRectangleRounded((Rectangle){ pill.x + 2, pill.y + 3, pill.width, pill.height }, 0.5f, 8, Fade(BLACK, 0.3f));
     DrawRectangleRounded(pill, 0.5f, 8, Fade(UI_BG, 0.9f));
     DrawRectangleRoundedLinesEx(pill, 0.5f, 8, 1.5f, UI_BORDER);
-    Vector2 bug = { pill.x + 19, pill.y + 17 };   /* joaninha vista de cima */
-    Color dk = { 30, 20, 20, 255 };
-    DrawCircleV((Vector2){ bug.x, bug.y - 6 }, 3.6f, dk);
-    DrawCircleV(bug, 7, (Color){ 215, 50, 42, 255 });
-    DrawLineEx((Vector2){ bug.x, bug.y - 5 }, (Vector2){ bug.x, bug.y + 7 }, 1.2f, dk);
-    DrawCircleV((Vector2){ bug.x - 3.2f, bug.y - 1 }, 1.5f, dk);
-    DrawCircleV((Vector2){ bug.x + 3.2f, bug.y - 1 }, 1.5f, dk);
-    DrawCircleV((Vector2){ bug.x - 2.8f, bug.y + 3.5f }, 1.3f, dk);
-    DrawCircleV((Vector2){ bug.x + 2.8f, bug.y + 3.5f }, 1.3f, dk);
-    DrawCircleV((Vector2){ bug.x - 2.5f, bug.y - 3.5f }, 1.6f, Fade(WHITE, 0.35f));
+    DrawMiniBug(ENEMY_NORMAL, (Vector2){ pill.x + 19, pill.y + 17 });
     DesenharTexto(TextFormat("%d restante%s", remaining, remaining == 1 ? "" : "s"), (int)pill.x + 36, (int)pill.y + 8, 16, UI_TEXT);
 }
 
@@ -1820,11 +2064,12 @@ static void DrawToast(int y)
     DesenharTexto(msgText, (int)r.x + 16, (int)r.y + 8, fs, Fade(UI_TEXT, a));
 }
 
-static void DrawSpecialLine(const TowerInfo *ti, float poisonScale, int x, int y, int fs)
+static void DrawSpecialLine(const TowerInfo *ti, int level, int x, int y, int fs)
 {
-    if (ti->splash > 0)    DesenharTexto(TextFormat("Dano em área: %.0f px", ti->splash), x, y, fs, ORANGE);
-    if (ti->slow > 0)      DesenharTexto(TextFormat("Deixa lento: -%.0f%% velocidade", ti->slow * 100), x, y, fs, SKYBLUE);
-    if (ti->poisonDps > 0) DesenharTexto(TextFormat("Veneno: %.0f + %.0f%% da vida/s", ti->poisonDps * poisonScale, ti->poisonPct * 100 * poisonScale), x, y, fs, LIME);
+    float m = 1.0f + UPG_DAMAGE * (level - 1);
+    if (ti->splash > 0)    DesenharTexto(TextFormat("Dano em área: %.0f px", ti->splash * (1.0f + 0.15f * (level - 1))), x, y, fs, ORANGE);
+    if (ti->slow > 0)      DesenharTexto(TextFormat("Lentidão em área: -%.0f%%", (ti->slow + 0.10f * (level - 1)) * 100), x, y, fs, SKYBLUE);
+    if (ti->poisonDps > 0) DesenharTexto(TextFormat("Veneno: %.0f + %.0f%% da vida/s", ti->poisonDps * m, ti->poisonPct * 100 * m), x, y, fs, LIME);
 }
 
 /* Cartao com os dados da planta selecionada, ao lado dela no mapa */
@@ -1846,10 +2091,9 @@ static void DrawSelectionCard(void)
     DesenharTexto(TextFormat("Nível %d/%d", t->level, MAX_LEVEL), (int)x + 44, (int)y + 32, 12, UI_MUTED);
     DrawLevelPips(x + 124, y + 38, t->level);
 
-    float scale = 1.0f + UPG_DAMAGE * (t->level - 1);
     DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f", TowerDamage(t), TowerRange(t)), (int)x + 10, (int)y + 54, 12, UI_TEXT);
     DesenharTexto(TextFormat("Tiros/s %.1f", TowerFireRate(t)), (int)x + 10, (int)y + 70, 12, UI_TEXT);
-    DrawSpecialLine(ti, scale, (int)x + 10, (int)y + 86, 12);
+    DrawSpecialLine(ti, t->level, (int)x + 10, (int)y + 86, 12);
     const char *next = t->level >= MAX_LEVEL ? "Nível máximo"
                      : !upgradesUnlocked ? TextFormat("Melhorias na onda %d", UPGRADE_UNLOCK_WAVE)
                      : TextFormat("Próximo nível: $%d", UpgradeCost(t));
@@ -1873,7 +2117,7 @@ static void DrawPlantTooltip(int i, float bx, int y0)
     DesenharTexto(ti->desc, (int)x + 10, (int)tip.y + 56, 12, UI_MUTED);
     DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), (int)x + 10, (int)tip.y + 74, 12, UI_TEXT);
     if (!unlocked[i]) DesenharTexto(TextFormat("Bloqueada: %d sementes na loja [L]", ti->seedPrice), (int)x + 10, (int)tip.y + 92, 12, (Color){ 240, 140, 120, 255 });
-    else              DrawSpecialLine(ti, 1.0f, (int)x + 10, (int)tip.y + 92, 12);
+    else              DrawSpecialLine(ti, 1, (int)x + 10, (int)tip.y + 92, 12);
 }
 
 static void DrawUI(void)
@@ -2012,7 +2256,7 @@ static void DrawShop(void)
         DrawCoin((Vector2){ x + 20, y + 98.0f }, 6);
         DesenharTexto(TextFormat("Plantar: $%d", ti->cost), x + 32, y + 92, 14, UI_ACCENT);
         DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), x + 14, y + 114, 13, UI_TEXT);
-        DrawSpecialLine(ti, 1.0f, x + 14, y + 134, 13);
+        DrawSpecialLine(ti, 1, x + 14, y + 134, 13);
 
         Rectangle btn = { card.x + 14, card.y + 164, 252, 34 };
         if (unlocked[i]) {
@@ -2095,15 +2339,16 @@ static void DrawMenu(void)
         { "Espaço",   "Próxima onda" },        { "L",          "Loja de plantas" },
         { "F",        "Velocidade 1x / 2x" },  { "P / Esc",    "Pausar" },
         { "D",        "Mapa da BFS" },         { "Botão dir.", "Cancelar" },
+        { "M",        "Som liga / desliga" },  { "Enter",      "Escolher fase" },
     };
     rows[2].d = TextFormat("Melhorar (onda %d+)", UPGRADE_UNLOCK_WAVE);
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 12; i++) {
         int x = 200 + (i % 2) * 290, y = 210 + (i / 2) * 30;
         DrawKeyChip(rows[i].k, x, y);
         DesenharTexto(rows[i].d, x + 104, y + 3, 16, UI_TEXT);
     }
 
-    DesenharTexto("DICAS", 200, 370, 16, UI_MUTED);
+    DesenharTexto("DICAS", 200, 398, 16, UI_MUTED);
     const char *tips[] = {
         "As pragas seguem a estrada - plante na grama, perto das curvas.",
         "Só dá para plantar quando a onda acaba.",
@@ -2111,7 +2356,7 @@ static void DrawMenu(void)
         "Ganhe sementes e libere novas plantas na loja (o progresso fica salvo).",
     };
     for (int i = 0; i < 4; i++) {
-        int y = 396 + i * 28;
+        int y = 422 + i * 26;
         DrawCircle(208, y + 8, 4, (Color){ 120, 200, 90, 255 });
         DesenharTexto(tips[i], 222, y, 16, UI_TEXT);
     }
@@ -2165,10 +2410,13 @@ static void DrawLevelSelect(void)
         int x = (int)card.x, y = (int)card.y;
 
         DrawMiniMap(i, card.x + 20, card.y + 18, 12);
-        if (won) {
-            Rectangle badge = { card.x + 176, card.y + 24, 78, 22 };
-            DrawRectangleRounded(badge, 0.5f, 8, (Color){ 60, 140, 60, 255 });
-            DesenharTexto("VENCIDA", (int)badge.x + 10, (int)badge.y + 3, 14, UI_TEXT);
+        const char *rec = won ? TextFormat("VENCIDA · %d vidas", bestLives[i])
+                        : bestWave[i] > 0 ? TextFormat("Recorde: onda %d", bestWave[i]) : NULL;
+        if (rec) {
+            float bw = MedirTexto(rec, 14) + 20.0f;
+            Rectangle badge = { card.x + 254 - bw, card.y + 24, bw, 22 };
+            DrawRectangleRounded(badge, 0.5f, 8, won ? (Color){ 60, 140, 60, 255 } : (Color){ 40, 52, 44, 235 });
+            DesenharTexto(rec, (int)badge.x + 10, (int)badge.y + 3, 14, UI_TEXT);
         }
 
         DesenharTexto(TextFormat("Fase %d", i + 1), x + 20, y + 176, 14, UI_MUTED);
@@ -2236,7 +2484,9 @@ static void DrawEndScreen(bool victory)
     if (DrawButton((Rectangle){ pnl.x + 255, pnl.y + 262, 225, 50 }, "Escolher fase", NULL, true, false))
         state = STATE_LEVELS;
     if (victory && !hasNext)
-        DrawCentered("Você venceu todas as fases!", (int)pnl.y + 238, 16, UI_ACCENT);
+        DrawCentered(newRecord ? "Você venceu todas as fases! Novo recorde!" : "Você venceu todas as fases!", (int)pnl.y + 238, 16, UI_ACCENT);
+    else if (newRecord)
+        DrawCentered("Novo recorde nesta fase!", (int)pnl.y + 238, 16, UI_ACCENT);
 }
 
 static void DrawOverlay(void)
@@ -2274,6 +2524,8 @@ int main(void)
     SetExitKey(KEY_NULL);   /* ESC pausa em vez de fechar */
     SetTargetFPS(60);
     CarregarFontes();
+    InitAudioDevice();
+    LoadSounds();
     LoadProgress();
     ResetGame();
 
@@ -2281,6 +2533,12 @@ int main(void)
         float dt = GetFrameTime();
         if (dt > 0.05f) dt = 0.05f;
         if (msgTimer > 0) msgTimer -= dt;
+
+        if (IsKeyPressed(KEY_M)) {   /* liga/desliga o som em qualquer tela */
+            soundOn = !soundOn;
+            SaveProgress();
+            ShowMessage(soundOn ? "Som ligado" : "Som desligado");
+        }
 
         switch (state) {
             case STATE_MENU:
@@ -2346,6 +2604,8 @@ int main(void)
         EndDrawing();
     }
 
+    UnloadSounds();
+    CloseAudioDevice();
     DescarregarFontes();
     CloseWindow();
     return 0;
