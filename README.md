@@ -233,3 +233,11 @@ A estrada da segunda entrada se junta à estrada principal. Como a BFS parte da 
 - Linguagem **C (C99)**
 - **raylib 5** (gráficos, entrada e janela)
 - **raymath** (operações com vetores)
+
+---
+
+## INTEGRANTES
+- Vinicius Beleza
+- João Fernando
+- Bruno Rodrigues
+- Breno Ferreira
