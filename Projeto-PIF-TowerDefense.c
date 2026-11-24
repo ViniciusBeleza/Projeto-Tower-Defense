@@ -79,8 +79,9 @@
 
 /* Sementes ganhas (moeda da loja) */
 #define SEEDS_PER_WAVE   1
-#define SEEDS_BOSS_WAVE  3   /* bonus extra em ondas de chefe (5, 10, 15, 20) */
-#define SEEDS_PER_TANK   2
+#define SEEDS_BOSS_WAVE  2   /* bonus extra em ondas de chefe (5, 10, 15, 20) */
+#define SEEDS_PER_TANK   1   /* por caracol (chefe) derrotado */
+#define FIRST_WIN_MULT   2   /* a primeira vitoria de cada fase vale o bonus em dobro */
 
 /* ------------------------------------------------------------------ */
 /* Fases                                                              */
@@ -98,6 +99,7 @@ typedef struct {
     int   secondWave;     /* onda em que a segunda entrada abre */
     float hpMult;         /* multiplicador da vida das pragas */
     int   startMoney;     /* dinheiro no inicio da fase */
+    int   seedBonus;      /* sementes extras ao vencer a fase */
     int   pathLen;        /* passos da entrada ate a casa (so para mostrar) */
     Color grassA, grassB; /* cores da grama (xadrez) */
 } LevelInfo;
@@ -130,7 +132,7 @@ static const LevelInfo LEVELS[LEVEL_COUNT] = {
         "T++++..#............",
         "...........#........",
       },
-      .secondWave = 10, .hpMult = LEVEL1_HP, .startMoney = 150, .pathLen = 38,
+      .secondWave = 10, .hpMult = LEVEL1_HP, .startMoney = 150, .seedBonus = 6, .pathLen = 38,
       .grassA = { 98, 162, 82, 255 }, .grassB = { 90, 152, 76, 255 } },
 
     { .name = "Horta", .desc = "Caminho mais curto, 2ª entrada mais cedo",
@@ -148,7 +150,7 @@ static const LevelInfo LEVELS[LEVEL_COUNT] = {
         "................=..#",
         ".....#..........B...",
       },
-      .secondWave = 7, .hpMult = LEVEL2_HP, .startMoney = 160, .pathLen = 30,
+      .secondWave = 7, .hpMult = LEVEL2_HP, .startMoney = 160, .seedBonus = 10, .pathLen = 30,
       .grassA = { 132, 162, 74, 255 }, .grassB = { 122, 152, 68, 255 } },
 
     { .name = "Estufa", .desc = "Duas entradas e estrada curtinha",
@@ -166,7 +168,7 @@ static const LevelInfo LEVELS[LEVEL_COUNT] = {
         "..#......=.......#..",
         ".........B..........",
       },
-      .secondWave = 4, .hpMult = LEVEL3_HP, .startMoney = 180, .pathLen = 18,
+      .secondWave = 4, .hpMult = LEVEL3_HP, .startMoney = 180, .seedBonus = 14, .pathLen = 18,
       .grassA = { 80, 152, 108, 255 }, .grassB = { 72, 142, 100, 255 } },
 };
 
@@ -179,6 +181,7 @@ typedef enum {
     TOWER_BASIC, TOWER_SNIPER,                    /* liberadas desde o inicio */
     TOWER_FROST,                                  /* comprada na loja */
     TOWER_CANNON, TOWER_POISON, TOWER_LASER,      /* compradas na loja */
+    TOWER_CARROT, TOWER_ORCHID,                   /* exclusivas: Horta e Estufa (gratis, so na sua fase) */
     TOWER_COUNT
 } TowerKind;
 typedef enum { ENEMY_NORMAL, ENEMY_FAST, ENEMY_TANK } EnemyKind;
@@ -197,8 +200,15 @@ typedef struct {
     float splash;     /* raio de dano em area (0 = sem area) */
     float poisonDps;  /* dano por segundo do veneno (0 = sem veneno) */
     float poisonPct;  /* veneno extra: fracao da vida maxima do alvo por segundo */
+    int   pierce;     /* 1 = o tiro atravessa todas as pragas em linha reta */
+    int   chain;      /* quantas pragas extras o tiro atinge saltando (0 = nenhuma) */
+    int   exclusive;  /* 0 = todas as fases; N = so na fase N (1 = Jardim, 2 = Horta, 3 = Estufa) */
     Color color;
 } TowerInfo;
+
+#define PIERCE_MAX     10      /* pragas que uma cenoura atravessa no maximo */
+#define CHAIN_RANGE    95.0f   /* distancia maxima de um salto da orquidea */
+#define CHAIN_FALLOFF  0.8f    /* cada salto causa 80% do dano do anterior */
 
 /* Veneno da Urtiga tambem tira uma % da vida maxima, para continuar util nas ondas finais */
 #ifndef POISON_PCT
@@ -214,7 +224,7 @@ static const TowerInfo TOWER_INFO[TOWER_COUNT] = {
       .cost = 135, .seedPrice = 0, .range = 260, .fireRate = 0.5f, .damage = 45, .projSpeed = 900, .projSize = 3,
       .color = { 46, 139, 87, 255 } },
     { .name = "Menta",    .desc = "Folhas geladas deixam lento",
-      .cost = 70,  .seedPrice = 4, .range = 100, .fireRate = 1.0f, .damage = 4,  .projSpeed = 350, .projSize = 4,
+      .cost = 70,  .seedPrice = 4, .range = 100, .fireRate = 1.25f, .damage = 8,  .projSpeed = 350, .projSize = 4,
       .slow = 0.5f, .color = { 120, 225, 205, 255 } },
     { .name = "Abóbora",  .desc = "Abóbora explosiva: dano em área",
       .cost = 140, .seedPrice = 14, .range = 130, .fireRate = 0.6f, .damage = 22, .projSpeed = 300, .projSize = 7,
@@ -225,6 +235,12 @@ static const TowerInfo TOWER_INFO[TOWER_COUNT] = {
     { .name = "Girassol", .desc = "Raios de sol muito rápidos",
       .cost = 75,  .seedPrice = 10, .range = 150, .fireRate = 6.0f, .damage = 3,  .projSpeed = 1200, .projSize = 2,
       .color = { 255, 210, 0, 255 } },
+    { .name = "Cenoura",  .desc = "Cenouras que atravessam a fila",
+      .cost = 110, .seedPrice = 0, .range = 170, .fireRate = 0.8f, .damage = 17, .projSpeed = 650, .projSize = 5,
+      .pierce = 1, .exclusive = 2, .color = { 255, 132, 30, 255 } },
+    { .name = "Orquídea", .desc = "Pólen que salta entre as pragas",
+      .cost = 125, .seedPrice = 0, .range = 140, .fireRate = 0.9f, .damage = 12, .projSpeed = 520, .projSize = 5,
+      .chain = 3, .exclusive = 3, .color = { 222, 120, 232, 255 } },
 };
 
 #define POISON_TIME 3.0f
@@ -264,7 +280,18 @@ typedef struct {
     int     kind;         /* planta que atirou (cada uma tem um tiro desenhado diferente) */
     Vector2 dir;          /* direcao do movimento (para rastros e espinhos) */
     float   total, done;  /* distancia total e percorrida (arco da abobora) */
+    bool    pierce;       /* cenoura: voa reto e atravessa as pragas */
+    int     chain;        /* orquidea: saltos para pragas vizinhas */
+    int     hits[PIERCE_MAX], nHits;   /* pragas ja atravessadas por esta cenoura */
 } Projectile;
+
+/* Raio de polen da orquidea saltando entre duas pragas */
+typedef struct {
+    bool    active;
+    Vector2 a, b;
+    float   life;
+} Bolt;
+#define MAX_BOLT 48
 
 /* Efeito visual simples (explosao do canhao) */
 typedef struct {
@@ -293,6 +320,24 @@ typedef struct {
     Color   color;
 } FloatText;
 
+/* Adubos: melhorias permanentes compradas com sementes na loja (3 niveis cada) */
+#define ADUBO_COUNT 3
+#define ADUBO_MAX   3
+enum { ADUBO_DANO, ADUBO_DINHEIRO, ADUBO_VIDAS };
+typedef struct {
+    const char *name;
+    const char *desc;
+    int cost[ADUBO_MAX];
+} AduboInfo;
+static const AduboInfo ADUBOS[ADUBO_COUNT] = {
+    { "Adubo forte",     "+6% de dano em todas as plantas", { 8, 14, 20 } },
+    { "Cofrinho",        "+$25 de dinheiro no começo da fase", { 6, 10, 16 } },
+    { "Cerca reforçada", "+2 vidas no começo da fase",       { 6, 10, 16 } },
+};
+#define ADUBO_DANO_POR_NIVEL     0.06f
+#define ADUBO_DINHEIRO_POR_NIVEL 25
+#define ADUBO_VIDAS_POR_NIVEL    2
+
 /* ------------------------------------------------------------------ */
 /* Estado global do jogo                                              */
 /* ------------------------------------------------------------------ */
@@ -304,6 +349,7 @@ static Projectile projs[MAX_PROJ];
 static Effect     effects[MAX_FX];
 static FloatText  floats[MAX_FLOAT];
 static Particle   parts[MAX_PART];
+static Bolt       bolts[MAX_BOLT];
 static float      shake;                  /* tremida da tela quando a casa e atingida */
 static float      bannerTimer;            /* faixa animada no comeco de cada onda */
 static char       bannerText[24], bannerSub[48];
@@ -327,6 +373,9 @@ static bool LevelUnlocked(int i) { return i == 0 || (levelsWon & (1 << (i - 1)))
 /* Progresso permanente (salvo em arquivo) */
 static int   seeds;
 static bool  unlocked[TOWER_COUNT];
+static int   adubo[ADUBO_COUNT];          /* nivel comprado de cada adubo (0 a 3) */
+static int   seedsRun;                    /* sementes ganhas na partida atual */
+static int   shopTab;                     /* 0 = plantas, 1 = adubos */
 
 static bool  upgradesUnlocked;            /* vira true ao terminar a onda anterior a UPGRADE_UNLOCK_WAVE */
 static int   money, lives, wave;
@@ -530,8 +579,9 @@ static void SfxPitch(SfxId id, float pitch)
 static void Sfx(SfxId id) { SfxPitch(id, 1.0f); }
 
 static float TowerRange(const Tower *t)    { return TOWER_INFO[t->kind].range    * (1.0f + UPG_RANGE    * (t->level - 1)); }
-static float TowerDamage(const Tower *t)   { return TOWER_INFO[t->kind].damage   * (1.0f + UPG_DAMAGE   * (t->level - 1)); }
-static float TowerPoison(const Tower *t)   { return TOWER_INFO[t->kind].poisonDps * (1.0f + UPG_DAMAGE  * (t->level - 1)); }
+static float DamageBonus(void)             { return 1.0f + ADUBO_DANO_POR_NIVEL * adubo[ADUBO_DANO]; }
+static float TowerDamage(const Tower *t)   { return TOWER_INFO[t->kind].damage   * (1.0f + UPG_DAMAGE   * (t->level - 1)) * DamageBonus(); }
+static float TowerPoison(const Tower *t)   { return TOWER_INFO[t->kind].poisonDps * (1.0f + UPG_DAMAGE  * (t->level - 1)) * DamageBonus(); }
 /* Menta: 50% de lentidao no nivel 1, +10% por nivel. Abobora: explosao +15% por nivel */
 static float TowerSlow(const Tower *t)   { return TOWER_INFO[t->kind].slow > 0 ? TOWER_INFO[t->kind].slow + 0.10f * (t->level - 1) : 0; }
 static float TowerSplash(const Tower *t) { return TOWER_INFO[t->kind].splash * (1.0f + 0.15f * (t->level - 1)); }
@@ -550,6 +600,7 @@ static int   SellValue(const Tower *t)     { return (int)(t->invested * 0.7f); }
  *   recordes 20 12 0 (melhor onda alcancada em cada fase; 20 = venceu)
  *   vidas 14 0 0     (mais vidas sobrando numa vitoria, por fase)
  *   som 1            (1 = ligado, 0 = desligado)
+ *   adubos 2 1 0     (nivel de cada adubo: dano, dinheiro, vidas)
  */
 static void SaveProgress(void)
 {
@@ -561,7 +612,9 @@ static void SaveProgress(void)
     for (int i = 0; i < LEVEL_COUNT; i++) fprintf(f, " %d", bestWave[i]);
     fprintf(f, "\nvidas");
     for (int i = 0; i < LEVEL_COUNT; i++) fprintf(f, " %d", bestLives[i]);
-    fprintf(f, "\nsom %d\n", soundOn ? 1 : 0);
+    fprintf(f, "\nsom %d\nadubos", soundOn ? 1 : 0);
+    for (int i = 0; i < ADUBO_COUNT; i++) fprintf(f, " %d", adubo[i]);
+    fprintf(f, "\n");
     fclose(f);
 }
 
@@ -571,6 +624,7 @@ static void LoadProgress(void)
     levelsWon = 0;
     soundOn = true;
     for (int i = 0; i < LEVEL_COUNT; i++) bestWave[i] = bestLives[i] = 0;
+    for (int i = 0; i < ADUBO_COUNT; i++) adubo[i] = 0;
     for (int i = 0; i < TOWER_COUNT; i++) unlocked[i] = (TOWER_INFO[i].seedPrice == 0);
 
     FILE *f = fopen(SAVE_FILE, "r");
@@ -594,13 +648,30 @@ static void LoadProgress(void)
     if (fscanf(f, " vidas%n", &got) >= 0 && got > 0)
         for (int i = 0; i < LEVEL_COUNT && fscanf(f, " %d", &v) == 1; i++) bestLives[i] = v;
     if (fscanf(f, " som %d", &v) == 1) soundOn = (v != 0);
+    got = 0;
+    if (fscanf(f, " adubos%n", &got) >= 0 && got > 0)
+        for (int i = 0; i < ADUBO_COUNT && fscanf(f, " %d", &v) == 1; i++)
+            adubo[i] = v < 0 ? 0 : v > ADUBO_MAX ? ADUBO_MAX : v;
     fclose(f);
 }
 
 static void AddSeeds(int n)
 {
     seeds += n;
+    seedsRun += n;
     SaveProgress();
+}
+
+static void BuyAdubo(int i)
+{
+    if (adubo[i] >= ADUBO_MAX) { ShowMessage("Nível máximo"); Sfx(SFX_ERROR); return; }
+    int cost = ADUBOS[i].cost[adubo[i]];
+    if (seeds < cost) { ShowMessage("Sementes insuficientes"); Sfx(SFX_ERROR); return; }
+    seeds -= cost;
+    adubo[i]++;
+    SaveProgress();
+    Sfx(SFX_UPGRADE);
+    ShowMessage(TextFormat("%s: nível %d!", ADUBOS[i].name, adubo[i]));
 }
 
 static void BuyTower(int kind)
@@ -696,13 +767,15 @@ static void ResetGame(void)
     memset(effects, 0, sizeof(effects));
     memset(floats, 0, sizeof(floats));
     memset(parts, 0, sizeof(parts));
+    memset(bolts, 0, sizeof(bolts));
     baseFlash = 0;
     shake = 0;
     bannerTimer = 0;
     ComputeDistances(dist);
 
-    money = LEVELS[currentLevel].startMoney;
-    lives = START_LIVES;
+    money = LEVELS[currentLevel].startMoney + ADUBO_DINHEIRO_POR_NIVEL * adubo[ADUBO_DINHEIRO];
+    lives = START_LIVES + ADUBO_VIDAS_POR_NIVEL * adubo[ADUBO_VIDAS];
+    seedsRun = 0;
     wave = 0;
     waveActive = false;
     waveSize = spawnedInWave = 0;
@@ -773,6 +846,8 @@ static void FinishGame(bool victory)
     int lv = currentLevel;
     newRecord = false;
     if (victory) {
+        bool firstWin = (levelsWon & (1 << lv)) == 0;
+        AddSeeds(LEVELS[lv].seedBonus * (firstWin ? FIRST_WIN_MULT : 1));
         levelsWon |= 1 << lv;
         newRecord = bestWave[lv] < MAX_WAVES || lives > bestLives[lv];
         bestWave[lv] = MAX_WAVES;
@@ -847,7 +922,7 @@ static void DamageEnemy(Enemy *e, float dmg)
         SfxPitch(SFX_POP, RandF(0.9f, 1.15f));
         if (e->kind == ENEMY_TANK) {
             AddSeeds(SEEDS_PER_TANK);
-            ShowMessage(TextFormat("Tanque destruído! +%d sementes", SEEDS_PER_TANK));
+            ShowMessage(TextFormat("Caracol derrotado! +%d semente%s", SEEDS_PER_TANK, SEEDS_PER_TANK == 1 ? "" : "s"));
         }
     }
 }
@@ -909,8 +984,11 @@ static void FireProjectile(const Tower *t, Vector2 from, int targetIdx)
             .kind = t->kind,
             .dir = Vector2Normalize(Vector2Subtract(enemies[targetIdx].pos, from)),
             .total = fmaxf(1.0f, Vector2Distance(enemies[targetIdx].pos, from)),
+            .pierce = TOWER_INFO[t->kind].pierce > 0,
+            .chain = TOWER_INFO[t->kind].chain > 0 ? TOWER_INFO[t->kind].chain + (t->level - 1) : 0,
         };
-        static const float SHOT_PITCH[TOWER_COUNT] = { 1.0f, 0.7f, 1.35f, 0.55f, 1.15f, 1.6f };
+        if (projs[i].pierce) projs[i].total = TowerRange(t) + 40;   /* a cenoura voa reto ate o fim do alcance */
+        static const float SHOT_PITCH[TOWER_COUNT] = { 1.0f, 0.7f, 1.35f, 0.55f, 1.15f, 1.6f, 0.85f, 1.9f };
         SfxPitch(SFX_SHOOT, SHOT_PITCH[t->kind] * RandF(0.95f, 1.05f));
         return;
     }
@@ -964,8 +1042,19 @@ static void SpawnEffect(Vector2 pos, float radius, Color color)
     }
 }
 
+static void SpawnBolt(Vector2 a, Vector2 b)
+{
+    for (int i = 0; i < MAX_BOLT; i++) {
+        if (bolts[i].active) continue;
+        bolts[i] = (Bolt){ true, a, b, 0.18f };
+        return;
+    }
+}
+
 static void UpdateEffects(float dt)
 {
+    for (int i = 0; i < MAX_BOLT; i++)
+        if (bolts[i].active && (bolts[i].life -= dt) <= 0) bolts[i].active = false;
     for (int i = 0; i < MAX_FX; i++)
         if (effects[i].active && (effects[i].life -= dt) <= 0) effects[i].active = false;
     for (int i = 0; i < MAX_FLOAT; i++) {
@@ -1014,6 +1103,26 @@ static void UpdateProjectiles(float dt)
         Projectile *p = &projs[i];
         if (!p->active) continue;
 
+        if (p->pierce) {   /* Cenoura: voa reto e atinge cada praga do caminho uma vez */
+            float stepP = p->speed * dt;
+            p->pos = Vector2Add(p->pos, Vector2Scale(p->dir, stepP));
+            p->done += stepP;
+            for (int j = 0; j < MAX_ENEMIES && p->nHits < PIERCE_MAX; j++) {
+                Enemy *o = &enemies[j];
+                if (!o->active || Vector2Distance(p->pos, o->pos) > o->radius + p->size + 4) continue;
+                bool already = false;
+                for (int k = 0; k < p->nHits; k++) if (p->hits[k] == o->uid) already = true;
+                if (already) continue;
+                p->hits[p->nHits++] = o->uid;
+                Burst(o->pos, 3, 55, 0.22f, 2.5f, 0, p->color);
+                ApplyHit(o, p);
+            }
+            if (p->done >= p->total || p->nHits >= PIERCE_MAX ||
+                p->pos.x < -20 || p->pos.x > SCREEN_W + 20 || p->pos.y < -20 || p->pos.y > GRID_H + 20)
+                p->active = false;
+            continue;
+        }
+
         Enemy *e = &enemies[p->target];
         if (!e->active || e->uid != p->targetUid) { p->active = false; continue; }
 
@@ -1044,6 +1153,30 @@ static void UpdateProjectiles(float dt)
                     Burst(e->pos, 6, 70, 0.35f, 3, 0, (Color){ 200, 240, 255, 230 });
                 }
                 ApplyHit(e, p);
+                if (p->chain > 0) {   /* Orquidea: o polen salta para as pragas mais proximas */
+                    int hitUids[8] = { e->uid }, nh = 1;
+                    Vector2 from = e->pos;
+                    float dmg = p->damage;
+                    for (int c = 0; c < p->chain && nh < 8; c++) {
+                        dmg *= CHAIN_FALLOFF;
+                        int best = -1;
+                        float bd = CHAIN_RANGE;
+                        for (int j = 0; j < MAX_ENEMIES; j++) {
+                            Enemy *o = &enemies[j];
+                            if (!o->active) continue;
+                            bool used = false;
+                            for (int k = 0; k < nh; k++) if (hitUids[k] == o->uid) used = true;
+                            float dd = Vector2Distance(from, o->pos);
+                            if (!used && dd < bd) { bd = dd; best = j; }
+                        }
+                        if (best < 0) break;
+                        Enemy *o = &enemies[best];
+                        SpawnBolt(from, o->pos);
+                        hitUids[nh++] = o->uid;
+                        from = o->pos;
+                        DamageEnemy(o, dmg);
+                    }
+                }
             }
             p->active = false;
         } else {
@@ -1087,10 +1220,28 @@ static void UpdateWave(float dt)
     }
 }
 
+/* Plantas disponiveis na fase atual (as 6 normais + a exclusiva da fase, se houver).
+   A ordem define as teclas 1, 2, 3... */
+static int PlantSlots(int out[TOWER_COUNT])
+{
+    int n = 0;
+    for (int i = 0; i < TOWER_COUNT; i++)
+        if (TOWER_INFO[i].exclusive == 0 || TOWER_INFO[i].exclusive == currentLevel + 1) out[n++] = i;
+    return n;
+}
+
+static int ExclusivePlantOf(int level)
+{
+    for (int i = 0; i < TOWER_COUNT; i++) if (TOWER_INFO[i].exclusive == level + 1) return i;
+    return -1;
+}
+
 static void HandleInput(void)
 {
-    for (int i = 0; i < TOWER_COUNT; i++) {
-        if (!IsKeyPressed(KEY_ONE + i)) continue;
+    int slots[TOWER_COUNT], ns = PlantSlots(slots);
+    for (int k = 0; k < ns; k++) {
+        if (!IsKeyPressed(KEY_ONE + k)) continue;
+        int i = slots[k];
         if (waveActive) {
             ShowMessage("Só dá para plantar quando a onda acabar");
             Sfx(SFX_ERROR);
@@ -1646,6 +1797,40 @@ static void DrawPlant(TowerKind kind, Vector2 p, float s, float angle, bool dim)
             DrawCircleV((Vector2){ ctr.x + 2 * s, ctr.y + 1 * s }, 1.5f * s, Fade((Color){ 70, 40, 10, 255 }, a));
         } break;
 
+        case TOWER_CARROT: {  /* Cenoura: topo da raiz na terra, folhas e uma cenoura apontando para o alvo */
+            Color dkO = Fade((Color){ 196, 86, 18, 255 }, a);
+            Vector2 top = { p.x, p.y - 2 * s };
+            for (int k = -1; k <= 1; k++) {
+                Vector2 tipL = { top.x + k * 7 * s, top.y - 16 * s + (k != 0 ? 4 * s : 0) };
+                DrawLineEx(top, tipL, 3 * s, leaf);
+                DrawCircleV(tipL, 3.4f * s, leaf);
+            }
+            DrawEllipse((int)p.x, (int)(p.y + 4 * s), 11 * s, 9 * s, col);
+            DrawLineEx((Vector2){ p.x - 7 * s, p.y + 2 * s }, (Vector2){ p.x - 2 * s, p.y + 3 * s }, 1.5f * s, dkO);
+            DrawLineEx((Vector2){ p.x + 3 * s, p.y + 8 * s }, (Vector2){ p.x + 8 * s, p.y + 6 * s }, 1.5f * s, dkO);
+            Vector2 d = { cosf(angle), sinf(angle) }, nrm = { -d.y, d.x };
+            Vector2 base = { p.x + d.x * 7 * s, p.y + 3 * s + d.y * 7 * s };
+            Vector2 tip = { base.x + d.x * 13 * s, base.y + d.y * 13 * s };
+            Vector2 b1 = { base.x + nrm.x * 4 * s, base.y + nrm.y * 4 * s }, b2 = { base.x - nrm.x * 4 * s, base.y - nrm.y * 4 * s };
+            DrawTriangle(tip, b1, b2, col);   /* desenha nas duas ordens: o raylib so pinta a que fica no sentido certo */
+            DrawTriangle(tip, b2, b1, col);
+        } break;
+
+        case TOWER_ORCHID: {  /* Orquidea: petalas rosadas, centro amarelo e labelo */
+            Vector2 ctr = { p.x, p.y - 4 * s };
+            DrawLineEx((Vector2){ p.x, p.y + 12 * s }, ctr, 2.5f * s, dark);
+            DrawEllipse((int)(p.x + 7 * s), (int)(p.y + 7 * s), 7 * s, 3 * s, leaf);
+            Color light = Fade((Color){ 252, 210, 252, 255 }, a);
+            for (int k = 0; k < 5; k++) {
+                float an = angle * 0.3f + k * 2 * PI / 5 - PI / 2;
+                Vector2 q = { ctr.x + cosf(an) * 9 * s, ctr.y + sinf(an) * 9 * s };
+                DrawCircleV(q, 6.5f * s, col);
+                DrawCircleV((Vector2){ q.x + cosf(an) * 1.8f * s, q.y + sinf(an) * 1.8f * s }, 3 * s, light);
+            }
+            DrawCircleV(ctr, 5 * s, Fade((Color){ 255, 222, 90, 255 }, a));
+            DrawCircleV((Vector2){ ctr.x, ctr.y + 3 * s }, 3 * s, Fade((Color){ 196, 56, 136, 255 }, a));
+        } break;
+
         default: break;
     }
 }
@@ -1888,6 +2073,22 @@ static void DrawProjectile(const Projectile *pr)
             DrawCircleV(p, 2.6f, WHITE);
         } break;
 
+        case TOWER_CARROT: {   /* cenoura voando reto */
+            Vector2 tail = Vector2Add(p, Vector2Scale(back, 14));
+            DrawLineEx(tail, p, 7, (Color){ 196, 86, 18, 255 });
+            DrawLineEx(tail, p, 5, (Color){ 255, 140, 40, 255 });
+            Vector2 sd = { -back.y, back.x };
+            Vector2 lf = Vector2Add(tail, Vector2Scale(back, 3));
+            DrawLineEx(tail, Vector2Add(lf, Vector2Scale(sd, 3)), 2, (Color){ 80, 160, 60, 255 });
+            DrawLineEx(tail, Vector2Add(lf, Vector2Scale(sd, -3)), 2, (Color){ 80, 160, 60, 255 });
+        } break;
+
+        case TOWER_ORCHID: {   /* bolinha de polen brilhante */
+            DrawCircleV(p, pr->size + 4, Fade((Color){ 240, 150, 240, 255 }, 0.25f));
+            DrawCircleV(p, pr->size, (Color){ 232, 130, 236, 255 });
+            DrawCircleV(p, pr->size * 0.45f, (Color){ 255, 240, 255, 255 });
+        } break;
+
         default:
             DrawCircleV(p, pr->size, pr->color);
             break;
@@ -1898,6 +2099,20 @@ static void DrawProjectiles(void)
 {
     for (int i = 0; i < MAX_PROJ; i++)
         if (projs[i].active) DrawProjectile(&projs[i]);
+
+    for (int i = 0; i < MAX_BOLT; i++) {   /* raios de polen em zigue-zague */
+        if (!bolts[i].active) continue;
+        float al = bolts[i].life / 0.18f;
+        Vector2 a = bolts[i].a, b = bolts[i].b, prev = a;
+        Vector2 d = Vector2Subtract(b, a), n = Vector2Normalize((Vector2){ -d.y, d.x });
+        for (int k = 1; k <= 4; k++) {
+            float u = k / 4.0f, off = (k == 4) ? 0 : sinf(k * 2.3f + a.x * 0.1f) * 6;
+            Vector2 q = Vector2Add(Vector2Add(a, Vector2Scale(d, u)), Vector2Scale(n, off));
+            DrawLineEx(prev, q, 5, Fade((Color){ 240, 140, 240, 255 }, 0.35f * al));
+            DrawLineEx(prev, q, 2, Fade((Color){ 255, 235, 255, 255 }, al));
+            prev = q;
+        }
+    }
 
     for (int i = 0; i < MAX_FX; i++)
         if (effects[i].active) {
@@ -2070,6 +2285,8 @@ static void DrawSpecialLine(const TowerInfo *ti, int level, int x, int y, int fs
     if (ti->splash > 0)    DesenharTexto(TextFormat("Dano em área: %.0f px", ti->splash * (1.0f + 0.15f * (level - 1))), x, y, fs, ORANGE);
     if (ti->slow > 0)      DesenharTexto(TextFormat("Lentidão em área: -%.0f%%", (ti->slow + 0.10f * (level - 1)) * 100), x, y, fs, SKYBLUE);
     if (ti->poisonDps > 0) DesenharTexto(TextFormat("Veneno: %.0f + %.0f%% da vida/s", ti->poisonDps * m, ti->poisonPct * 100 * m), x, y, fs, LIME);
+    if (ti->pierce)        DesenharTexto("Atravessa a fila de pragas", x, y, fs, (Color){ 255, 170, 90, 255 });
+    if (ti->chain > 0)     DesenharTexto(TextFormat("Salta para +%d pragas", ti->chain + level - 1), x, y, fs, (Color){ 240, 170, 245, 255 });
 }
 
 /* Cartao com os dados da planta selecionada, ao lado dela no mapa */
@@ -2118,6 +2335,7 @@ static void DrawPlantTooltip(int i, float bx, int y0)
     DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), (int)x + 10, (int)tip.y + 74, 12, UI_TEXT);
     if (!unlocked[i]) DesenharTexto(TextFormat("Bloqueada: %d sementes na loja [L]", ti->seedPrice), (int)x + 10, (int)tip.y + 92, 12, (Color){ 240, 140, 120, 255 });
     else              DrawSpecialLine(ti, 1, (int)x + 10, (int)tip.y + 92, 12);
+    if (ti->exclusive) DesenharTexto(TextFormat("Exclusiva da %s", LEVELS[ti->exclusive - 1].name), (int)(x + w - 10 - MedirTexto(TextFormat("Exclusiva da %s", LEVELS[ti->exclusive - 1].name), 12)), (int)tip.y + 12, 12, UI_ACCENT);
 }
 
 static void DrawUI(void)
@@ -2155,19 +2373,29 @@ static void DrawUI(void)
     DrawRectangleRounded((Rectangle){ 20, y0 + 108.0f, 130, 5 }, 1, 4, (Color){ 18, 24, 20, 255 });
     if (prog > 0) DrawRectangleRounded((Rectangle){ 20, y0 + 108.0f, 130 * prog, 5 }, 1, 4, (Color){ 120, 200, 90, 255 });
 
-    /* Botoes das plantas (bloqueadas abrem a loja) */
+    /* Botoes das plantas (bloqueadas abrem a loja). Na Horta e na Estufa aparece
+       um 7o botao com a planta exclusiva da fase, e os botoes ficam mais estreitos. */
     int hovered = -1;
-    for (int i = 0; i < TOWER_COUNT; i++) {
-        Rectangle rec = { 170.0f + i * 82, y0 + 8.0f, 78, 110 };
+    float hoveredX = 0;
+    int slots[TOWER_COUNT], ns = PlantSlots(slots);
+    float bw = ns > 6 ? 68 : 78;
+    for (int k = 0; k < ns; k++) {
+        int i = slots[k];
+        Rectangle rec = { 170.0f + k * (bw + 4), y0 + 8.0f, bw, 110 };
         bool can = live && !waveActive && unlocked[i] && money >= TOWER_INFO[i].cost;
         if (DrawButton(rec, "", NULL, can, selBuild == i)) {
             selBuild = (selBuild == i) ? -1 : i;
             selC = selR = -1;
         }
-        if (CheckCollisionPointRec(mouse, rec)) hovered = i;
+        if (CheckCollisionPointRec(mouse, rec)) { hovered = i; hoveredX = rec.x + rec.width / 2 - 39; }
 
         Color txt = (unlocked[i] && !waveActive) ? UI_TEXT : UI_MUTED;
-        DesenharTexto(TextFormat("%d", i + 1), (int)rec.x + 7, (int)rec.y + 6, 12, UI_MUTED);
+        DesenharTexto(TextFormat("%d", k + 1), (int)rec.x + 7, (int)rec.y + 6, 12, UI_MUTED);
+        if (TOWER_INFO[i].exclusive) {   /* fitinha dourada no canto: planta exclusiva da fase */
+            Vector2 c1 = { rec.x + rec.width - 22, rec.y + 2 }, c2 = { rec.x + rec.width - 2, rec.y + 2 }, c3 = { rec.x + rec.width - 2, rec.y + 22 };
+            DrawTriangle(c1, c3, c2, UI_ACCENT);
+            DrawTriangle(c1, c2, c3, UI_ACCENT);
+        }
         Vector2 icon = { rec.x + rec.width / 2, rec.y + 32 };
         DrawPlant((TowerKind)i, icon, 0.68f, 0, !unlocked[i]);
         const char *name = TOWER_INFO[i].name;
@@ -2227,24 +2455,89 @@ static void DrawUI(void)
         OpenShop();
 
     if (live) DrawWaveBanner();
-    if (live && hovered >= 0) DrawPlantTooltip(hovered, 170.0f + hovered * 82, y0);
+    if (live && hovered >= 0) DrawPlantTooltip(hovered, hoveredX, y0);
     if (live) DrawToast(12);
 }
 
 static void DrawShop(void)
 {
-    DrawCentered("LOJA DE PLANTAS", 26, 44, UI_ACCENT);
+    DrawCentered("LOJA", 18, 40, UI_ACCENT);
     const char *sv = TextFormat("%d sementes", seeds);
     int sw = MedirTexto(sv, 24);
-    DrawSeedIcon((Vector2){ SCREEN_W / 2.0f - sw / 2.0f - 16, 92 }, 11);
-    DrawTextShadow(sv, SCREEN_W / 2 - sw / 2 + 4, 80, 24, (Color){ 232, 200, 150, 255 });
-    DrawCentered(TextFormat("Ganhe sementes: +%d por onda, +%d extra em onda de chefe, +%d por tanque destruído",
-                            SEEDS_PER_WAVE, SEEDS_BOSS_WAVE, SEEDS_PER_TANK), 116, 16, UI_MUTED);
+    DrawSeedIcon((Vector2){ SCREEN_W / 2.0f - sw / 2.0f - 16, 78 }, 11);
+    DrawTextShadow(sv, SCREEN_W / 2 - sw / 2 + 4, 66, 24, (Color){ 232, 200, 150, 255 });
 
-    for (int i = 0; i < TOWER_COUNT; i++) {
+    /* abas: plantas | adubos (TAB tambem troca) */
+    if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 205, 102, 200, 36 }, "Plantas", NULL, true, shopTab == 0)) shopTab = 0;
+    if (DrawButton((Rectangle){ SCREEN_W / 2.0f + 5, 102, 200, 36 }, "Adubos", NULL, true, shopTab == 1)) shopTab = 1;
+    DrawCentered(TextFormat("Sementes: +%d por onda, +%d extra em onda de chefe, +%d por caracol e um bônus ao vencer a fase (dobrado na 1ª vitória)",
+                            SEEDS_PER_WAVE, SEEDS_BOSS_WAVE, SEEDS_PER_TANK), 148, 14, UI_MUTED);
+
+    if (shopTab == 1) {
+        for (int i = 0; i < ADUBO_COUNT; i++) {
+            const AduboInfo *ai = &ADUBOS[i];
+            Rectangle card = { 30.0f + i * 310, 176, 280, 410 };
+            bool maxed = adubo[i] >= ADUBO_MAX;
+            DrawPanel(card, UI_PANEL, maxed ? (Color){ 110, 200, 90, 255 } : UI_BORDER);
+            int x = (int)card.x, y = (int)card.y;
+
+            /* icone de cada adubo */
+            Vector2 ic = { x + 140.0f, y + 70.0f };
+            DrawCircleV(ic, 46, Fade(BLACK, 0.2f));
+            if (i == ADUBO_DANO) {          /* saquinho de adubo */
+                DrawRectangleRounded((Rectangle){ ic.x - 26, ic.y - 22, 52, 52 }, 0.35f, 8, (Color){ 176, 128, 76, 255 });
+                DrawRectangle((int)ic.x - 22, (int)ic.y - 28, 44, 10, (Color){ 140, 98, 56, 255 });
+                DrawPlant(TOWER_BASIC, (Vector2){ ic.x, ic.y + 6 }, 0.7f, -0.4f, false);
+            } else if (i == ADUBO_DINHEIRO) { /* cofrinho com moeda */
+                DrawEllipse((int)ic.x, (int)ic.y + 6, 32, 24, (Color){ 236, 140, 160, 255 });
+                DrawCircleV((Vector2){ ic.x + 26, ic.y + 4 }, 9, (Color){ 236, 140, 160, 255 });
+                DrawCircleV((Vector2){ ic.x + 30, ic.y + 4 }, 2, (Color){ 120, 60, 70, 255 });
+                DrawRectangle((int)ic.x - 6, (int)ic.y - 18, 12, 4, (Color){ 120, 60, 70, 255 });
+                DrawCoin((Vector2){ ic.x, ic.y - 30 }, 12);
+            } else {                          /* cerca com coracao */
+                Color wood = { 170, 124, 74, 255 };
+                for (int k = 0; k < 4; k++) DrawRectangle((int)ic.x - 34 + k * 19, (int)ic.y - 14, 11, 44, wood);
+                DrawRectangle((int)ic.x - 38, (int)ic.y - 2, 76, 7, (Color){ 120, 84, 46, 255 });
+                DrawRectangle((int)ic.x - 38, (int)ic.y + 16, 76, 7, (Color){ 120, 84, 46, 255 });
+                DrawHeart((Vector2){ ic.x, ic.y - 28 }, 14, (Color){ 232, 70, 70, 255 });
+            }
+
+            const char *nm = ai->name;
+            DrawTextShadow(nm, (int)(card.x + (card.width - MedirTexto(nm, 26)) / 2), y + 132, 26, UI_TEXT);
+            DesenharTexto(ai->desc, (int)(card.x + (card.width - MedirTexto(ai->desc, 14)) / 2), y + 170, 14, UI_MUTED);
+            DesenharTexto("por nível", (int)(card.x + (card.width - MedirTexto("por nível", 13)) / 2), y + 190, 13, UI_MUTED);
+
+            /* nivel atual */
+            for (int k = 0; k < ADUBO_MAX; k++) {
+                Vector2 pc = { card.x + 112 + k * 28, y + 232.0f };
+                DrawCircleV(pc, 10, Fade(BLACK, 0.35f));
+                DrawCircleV(pc, 8, k < adubo[i] ? UI_ACCENT : (Color){ 60, 70, 62, 255 });
+            }
+            const char *now = i == ADUBO_DANO     ? TextFormat("Agora: +%d%% de dano", (int)(ADUBO_DANO_POR_NIVEL * 100 * adubo[i] + 0.5f))
+                            : i == ADUBO_DINHEIRO ? TextFormat("Agora: +$%d no começo", ADUBO_DINHEIRO_POR_NIVEL * adubo[i])
+                            :                       TextFormat("Agora: +%d vidas", ADUBO_VIDAS_POR_NIVEL * adubo[i]);
+            DesenharTexto(now, (int)(card.x + (card.width - MedirTexto(now, 16)) / 2), y + 258, 16, UI_TEXT);
+            const char *lvl = TextFormat("Nível %d de %d", adubo[i], ADUBO_MAX);
+            DesenharTexto(lvl, (int)(card.x + (card.width - MedirTexto(lvl, 13)) / 2), y + 284, 13, UI_MUTED);
+
+            Rectangle btn = { card.x + 14, card.y + 352, 252, 40 };
+            if (maxed) {
+                DrawRectangleRounded(btn, 0.3f, 8, (Color){ 34, 78, 40, 255 });
+                const char *ok = "NÍVEL MÁXIMO";
+                DesenharTexto(ok, (int)(btn.x + (btn.width - MedirTexto(ok, 18)) / 2), (int)btn.y + 10, 18, (Color){ 140, 230, 110, 255 });
+            } else {
+                int cost = ai->cost[adubo[i]];
+                if (DrawButton(btn, TextFormat("Comprar - %d sementes", cost), NULL, seeds >= cost, seeds >= cost))
+                    BuyAdubo(i);
+            }
+        }
+    }
+
+    for (int i = 0; i < TOWER_COUNT && shopTab == 0; i++) {
         const TowerInfo *ti = &TOWER_INFO[i];
+        if (ti->exclusive) continue;   /* as exclusivas nao sao vendidas: aparecem na sua fase */
         int col = i % 3, row = i / 3;
-        Rectangle card = { 30.0f + col * 310, 145.0f + row * 230, 280, 210 };
+        Rectangle card = { 30.0f + col * 310, 176.0f + row * 214, 280, 202 };
         DrawPanel(card, UI_PANEL, unlocked[i] ? (Color){ 110, 200, 90, 255 } : UI_BORDER);
 
         int x = (int)card.x, y = (int)card.y;
@@ -2258,7 +2551,7 @@ static void DrawShop(void)
         DesenharTexto(TextFormat("Dano %.0f   Alcance %.0f   Tiros/s %.1f", ti->damage, ti->range, ti->fireRate), x + 14, y + 114, 13, UI_TEXT);
         DrawSpecialLine(ti, 1, x + 14, y + 134, 13);
 
-        Rectangle btn = { card.x + 14, card.y + 164, 252, 34 };
+        Rectangle btn = { card.x + 14, card.y + 158, 252, 34 };
         if (unlocked[i]) {
             DrawRectangleRounded(btn, 0.3f, 8, (Color){ 34, 78, 40, 255 });
             const char *ok = "LIBERADA";
@@ -2268,9 +2561,9 @@ static void DrawShop(void)
         }
     }
 
-    if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 616, 220, 42 }, "Voltar [L / ESC]", NULL, true, false))
+    if (DrawButton((Rectangle){ SCREEN_W / 2.0f - 110, 606, 220, 40 }, "Voltar [L / ESC]", NULL, true, false))
         state = shopReturn;
-    DrawToast(664);
+    DrawToast(656);
 }
 
 /* Tutorial mostrado quando as melhorias sao liberadas */
@@ -2353,7 +2646,7 @@ static void DrawMenu(void)
         "As pragas seguem a estrada - plante na grama, perto das curvas.",
         "Só dá para plantar quando a onda acaba.",
         TextFormat("%d fases: vença uma para liberar a próxima.", LEVEL_COUNT),
-        "Ganhe sementes e libere novas plantas na loja (o progresso fica salvo).",
+        "Ganhe sementes para liberar plantas e comprar adubos na loja (fica salvo).",
     };
     for (int i = 0; i < 4; i++) {
         int y = 422 + i * 26;
@@ -2375,7 +2668,9 @@ static void StartLevel(int i)
     currentLevel = i;
     ResetGame();
     state = STATE_PLAYING;
-    ShowMessage(TextFormat("Fase %d: %s", i + 1, LEVELS[i].name));
+    int ex = ExclusivePlantOf(i);
+    if (ex >= 0) ShowMessage(TextFormat("Fase %d: %s  ·  Planta exclusiva: %s [7]", i + 1, LEVELS[i].name, TOWER_INFO[ex].name));
+    else         ShowMessage(TextFormat("Fase %d: %s", i + 1, LEVELS[i].name));
 }
 
 /* Miniatura do mapa de uma fase, desenhada direto do texto do mapa */
@@ -2410,6 +2705,16 @@ static void DrawLevelSelect(void)
         int x = (int)card.x, y = (int)card.y;
 
         DrawMiniMap(i, card.x + 20, card.y + 18, 12);
+        int ex = ExclusivePlantOf(i);
+        if (ex >= 0) {
+            const char *et = TextFormat("Exclusiva: %s", TOWER_INFO[ex].name);
+            float ew = MedirTexto(et, 13) + 40.0f;
+            Rectangle pill = { card.x + 26, card.y + 132, ew, 24 };
+            DrawRectangleRounded(pill, 0.5f, 8, Fade((Color){ 24, 32, 26, 255 }, 0.92f));
+            DrawRectangleRoundedLinesEx(pill, 0.5f, 8, 1.5f, UI_ACCENT);
+            DrawPlant((TowerKind)ex, (Vector2){ pill.x + 16, pill.y + 12 }, 0.42f, 0, false);
+            DesenharTexto(et, (int)pill.x + 30, (int)pill.y + 4, 13, UI_ACCENT);
+        }
         const char *rec = won ? TextFormat("VENCIDA · %d vidas", bestLives[i])
                         : bestWave[i] > 0 ? TextFormat("Recorde: onda %d", bestWave[i]) : NULL;
         if (rec) {
@@ -2471,7 +2776,7 @@ static void DrawEndScreen(bool victory)
     DrawHeart((Vector2){ pnl.x + 150, y + 42.0f }, 9, (Color){ 232, 70, 70, 255 });
     DesenharTexto(TextFormat("Vidas restantes: %d", lives), (int)pnl.x + 170, y + 32, 20, UI_TEXT);
     DrawSeedIcon((Vector2){ pnl.x + 150, y + 74.0f }, 9);
-    DesenharTexto(TextFormat("Sementes guardadas: %d", seeds), (int)pnl.x + 170, y + 64, 20, UI_TEXT);
+    DesenharTexto(TextFormat("Sementes: +%d (total %d)", seedsRun, seeds), (int)pnl.x + 170, y + 64, 20, UI_TEXT);
 
     DrawCentered(TextFormat("Fase %d: %s", currentLevel + 1, LEVELS[currentLevel].name), (int)pnl.y + 118, 14, UI_MUTED);
 
@@ -2566,6 +2871,7 @@ int main(void)
                 break;
             case STATE_SHOP:   /* o jogo fica pausado enquanto a loja esta aberta */
                 if (IsKeyPressed(KEY_L) || IsKeyPressed(KEY_ESCAPE)) state = shopReturn;
+                if (IsKeyPressed(KEY_TAB)) shopTab = 1 - shopTab;
                 break;
             case STATE_TUTORIAL: /* jogo pausado ate o jogador fechar o tutorial */
                 if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE)) state = STATE_PLAYING;
